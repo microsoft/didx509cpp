@@ -397,7 +397,7 @@ namespace didx509
     {
       UqEVP_PKEY(const UqX509& x509);
 
-      UqEVP_PKEY(EVP_PKEY* key);
+      UqEVP_PKEY(const EVP_PKEY* key);
 
       UqEVP_PKEY(UqEVP_PKEY&& other) :
         UqSSLOBJECT(nullptr, EVP_PKEY_free, false)
@@ -432,8 +432,8 @@ namespace didx509
         BN_free(bn);
         return r;
       }
-    };
 #endif
+    };
 
     struct UqEVP_PKEY_CTX : public UqSSLOBJECT<EVP_PKEY_CTX, nullptr, nullptr>
     {
@@ -766,13 +766,15 @@ namespace didx509
       }
     };
 
-    inline UqEVP_PKEY::UqEVP_PKEY(const UqX509& x509) :
+    UqEVP_PKEY::UqEVP_PKEY(const UqX509& x509) :
       UqSSLOBJECT(X509_get_pubkey(x509), EVP_PKEY_free)
     {}
 
-    inline UqEVP_PKEY::UqEVP_PKEY(EVP_PKEY* key) :
-      UqSSLOBJECT(EVP_PKEY_dup(key), EVP_PKEY_free)
-    {}
+    UqEVP_PKEY::UqEVP_PKEY(const EVP_PKEY* key) :
+      UqSSLOBJECT((EVP_PKEY*)key, EVP_PKEY_free)
+    {
+      EVP_PKEY_up_ref((EVP_PKEY*)key);
+    }
 
     struct UqX509_NAME
       : public UqSSLOBJECT<X509_NAME, X509_NAME_new, X509_NAME_free>
