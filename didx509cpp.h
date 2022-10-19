@@ -452,6 +452,23 @@ namespace didx509
           UqASN1_OBJECT(NID_ext_key_usage));
       };
 
+      bool has_key_usage() const
+      {
+        return (X509_get_extension_flags(*this) & EXFLAG_KUSAGE) != 0;
+      }
+
+      bool has_key_usage_digital_signature() const
+      {
+        return has_key_usage() &&
+          (X509_get_key_usage(*this) & KU_DIGITAL_SIGNATURE) != 0;
+      }
+
+      bool has_key_usage_key_agreement() const
+      {
+        return has_key_usage() &&
+          (X509_get_key_usage(*this) & KU_KEY_AGREEMENT) != 0;
+      }
+
       bool has_common_name(const std::string& expected_name) const;
 
       std::map<std::string, std::vector<std::string>> subject() const
@@ -518,7 +535,7 @@ namespace didx509
 
       inline bool has_san(const std::string& san_type, const std::string& value)
       {
-        if (san_type == "dnsname")
+        if (san_type == "dns")
         {
           if (X509_check_host(*this, value.c_str(), value.size(), 0, NULL) == 1)
             return true;
@@ -852,10 +869,12 @@ namespace didx509
       }
 
       UqSTACK_OF_X509 verify(
-        const std::vector<UqX509>& roots, bool ignore_time = false, bool no_auth_key_id_ok = true)
+        const std::vector<UqX509>& roots,
+        bool ignore_time = false,
+        bool no_auth_key_id_ok = true)
       {
         if (size() <= 1)
-          throw std::runtime_error("certificate stack too small");
+          throw std::runtime_error("certificate chain too short");
 
         UqX509_STORE store;
 
@@ -874,6 +893,7 @@ namespace didx509
         CHECK1(X509_VERIFY_PARAM_set_flags(param, X509_V_FLAG_X509_STRICT));
         CHECK1(
           X509_VERIFY_PARAM_set_flags(param, X509_V_FLAG_CHECK_SS_SIGNATURE));
+        CHECK1(X509_VERIFY_PARAM_set_flags(param, X509_V_FLAG_PARTIAL_CHAIN));
 
         if (ignore_time)
           CHECK1(X509_VERIFY_PARAM_set_flags(param, X509_V_FLAG_NO_CHECK_TIME));
@@ -881,7 +901,8 @@ namespace didx509
         X509_STORE_CTX_set0_param(store_ctx, param);
 
 #if defined(OPENSSL_VERSION_MAJOR) && OPENSSL_VERSION_MAJOR >= 3
-        if (no_auth_key_id_ok) {
+        if (no_auth_key_id_ok)
+        {
           X509_STORE_CTX_set_verify_cb(
             store_ctx, [](int ok, X509_STORE_CTX* store_ctx) {
               int ec = X509_STORE_CTX_get_error(store_ctx);
@@ -1028,12 +1049,8 @@ namespace didx509
       return r;
     }
 
-    inline void verify(
-      const UqSTACK_OF_X509& chain, const std::string& did)
+    inline void verify(const UqSTACK_OF_X509& chain, const std::string& did)
     {
-      if (chain.size() < 2)
-        throw std::runtime_error("certificate chain too short");
-
       auto top_tokens = split(did, "::");
 
       if (top_tokens.size() <= 1)
@@ -1065,20 +1082,22 @@ namespace didx509
         if (parts.size() < 2)
           throw std::runtime_error("invalid policy");
 
-        auto scheme = parts[0];
+        auto policy_name = parts[0];
         auto args = std::vector<std::string>(parts.begin() + 1, parts.end());
 
-        if (scheme == "subject")
+        if (policy_name == "subject")
         {
           if (args.size() % 2 != 0)
             throw std::runtime_error("key-value pairs required");
-          auto decoded_args = url_unescape(args);
+
+          if (args.size() < 2)
+            throw std::runtime_error("at least one key-value pair is required");
 
           std::unordered_set<std::string> seen_fields;
-          for (size_t i = 0; i < decoded_args.size(); i += 2)
+          for (size_t i = 0; i < args.size(); i += 2)
           {
-            const auto& k = decoded_args[i];
-            const auto& v = decoded_args[i + 1];
+            const auto& k = args[i];
+            const auto& v = url_unescape(args[i + 1]);
 
             if (seen_fields.find(k) != seen_fields.end())
               throw std::runtime_error(
@@ -1107,7 +1126,7 @@ namespace didx509
                 std::string("invalid subject key/value: " + k + "=" + v));
           }
         }
-        else if (scheme == "san")
+        else if (policy_name == "san")
         {
           if (args.size() != 2)
             throw std::runtime_error("exactly one SAN type and value required");
@@ -1119,7 +1138,7 @@ namespace didx509
             throw std::runtime_error(
               std::string("SAN not found: ") + san_value);
         }
-        else if (scheme == "eku")
+        else if (policy_name == "eku")
         {
           if (args.size() != 1)
             throw std::runtime_error("exactly one EKU required");
@@ -1138,7 +1157,7 @@ namespace didx509
           if (!found_eku)
             throw std::runtime_error(std::string("EKU not found: ") + args[0]);
         }
-        else if (scheme == "fulcio-issuer")
+        else if (policy_name == "fulcio-issuer")
         {
           if (args.size() != 1)
             throw std::runtime_error("excessive arguments to fulcio-issuer");
@@ -1163,29 +1182,53 @@ namespace didx509
         }
         else
           throw std::runtime_error(
-            std::string("unsupported did:x509 scheme '") + scheme + "'");
+            std::string("unsupported did:x509 scheme '") + policy_name + "'");
       }
     }
 
     inline std::string create_did_document(
       const std::string& did, const UqSTACK_OF_X509& chain)
     {
-      std::string format = R"({
-      {
-          "@context": "https://www.w3.org/ns/did/v1",
-          "id": did,
-          "verificationMethod": [{
-              "id": f"_DID_#key-1",
-              "type": "JsonWebKey2020",
-              "controller": did,
-              "publicKeyJwk": _LEAF_JWK_,
-          }],
-          "assertionMethod": [f"_DID_#key-1"],
-      }
-      })";
+      std::string format = R"(
+{
+  {
+    "@context": "https://www.w3.org/ns/did/v1",
+    "id": "_DID_",
+    "verificationMethod": [{
+        "id": "_DID_#key-1",
+        "type": "JsonWebKey2020",
+        "controller": "_DID_",
+        "publicKeyJwk": _LEAF_JWK_
+    }]
+    _ASSERTION_METHOD_
+    _KEY_AGREEMENT_
+  }
+})";
+
+      const auto& leaf = chain.front();
+      bool include_assertion_method =
+        !leaf.has_key_usage() || leaf.has_key_usage_digital_signature();
+      bool include_key_agreement =
+        !leaf.has_key_usage() || leaf.has_key_usage_key_agreement();
+      if (!include_assertion_method && !include_key_agreement)
+        throw std::runtime_error(
+          "leaf certificate key usage must include digital signature or key "
+          "agreement");
+
+      std::string am, ka;
+      if (include_assertion_method)
+        am = ",\"assertionMethod\": \"" + did + "#key-1\"";
+      if (include_key_agreement)
+        ka = ",\"keyAgreement\": \"" + did + "#key-1\"";
+
+      const auto& leaf_jwk = leaf.public_jwk();
+
       auto t = std::regex_replace(format, std::regex("_DID_"), did);
-      const auto& leaf_jwk = chain.front().public_jwk();
-      return std::regex_replace(t, std::regex("_LEAF_JWK_"), leaf_jwk);
+      t = std::regex_replace(t, std::regex("_ASSERTION_METHOD_"), am);
+      t = std::regex_replace(t, std::regex("_KEY_AGREEMENT_"), ka);
+      t = std::regex_replace(t, std::regex("_LEAF_JWK_"), leaf_jwk);
+
+      return t;
     }
   }
 
