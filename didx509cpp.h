@@ -26,6 +26,11 @@
 #include <unordered_set>
 #include <vector>
 
+#if defined(OPENSSL_VERSION_MAJOR) && OPENSSL_VERSION_MAJOR >= 3
+#  include <openssl/core_names.h>
+#  include <openssl/types.h>
+#endif
+
 namespace didx509
 {
   namespace
@@ -619,9 +624,17 @@ namespace didx509
         {
           case EVP_PKEY_RSA: {
             r += "kty:\"RSA\",";
+
+#if defined(OPENSSL_VERSION_MAJOR) && OPENSSL_VERSION_MAJOR >= 3
+            BIGNUM *n = NULL, *e = NULL;
+            EVP_PKEY_CTX* ek_ctx = EVP_PKEY_CTX_new_id(EVP_PKEY_RSA, NULL);
+            EVP_PKEY_get_bn_param(pk, OSSL_PKEY_PARAM_RSA_N, &n);
+            EVP_PKEY_get_bn_param(pk, OSSL_PKEY_PARAM_RSA_E, &e);
+#else
             auto rsa = EVP_PKEY_get0_RSA(pk);
             const BIGNUM *n = NULL, *e = NULL, *d = NULL;
             RSA_get0_key(rsa, &n, &e, &d);
+#endif
             auto n_len = BN_num_bytes(n);
             auto e_len = BN_num_bytes(e);
             std::vector<uint8_t> nv(n_len), ev(e_len);
@@ -634,27 +647,34 @@ namespace didx509
           case EVP_PKEY_EC: {
             r += "\"kty\":\"EC\",";
             r += "\"crv\":\"";
-            EC_KEY* ec_key = EVP_PKEY_get0_EC_KEY(pk);
+#if defined(OPENSSL_VERSION_MAJOR) && OPENSSL_VERSION_MAJOR >= 3
+            BIGNUM *x = NULL, *y = NULL;
+            EVP_PKEY_get_bn_param(pk, OSSL_PKEY_PARAM_EC_PUB_X, &x);
+            EVP_PKEY_get_bn_param(pk, OSSL_PKEY_PARAM_EC_PUB_Y, &y);
+            size_t gname_len = 0;
+            CHECK1(EVP_PKEY_get_group_name(pk, NULL, 0, &gname_len));
+            std::string gname(gname_len + 1, 0);
+            CHECK1(EVP_PKEY_get_group_name(
+              pk, (char*)gname.data(), gname.size(), &gname_len));
+            gname.resize(gname_len);
+#else
+            auto ec_key = EVP_PKEY_get0_EC_KEY(pk);
             const EC_GROUP* grp = EC_KEY_get0_group(ec_key);
             int curve_nid = EC_GROUP_get_curve_name(grp);
-            switch (curve_nid)
-            {
-              case NID_X9_62_prime256v1:
-                r += "P-256";
-                break;
-              case NID_secp384r1:
-                r += "P-384";
-                break;
-              case NID_secp521r1:
-                r += "P-521";
-                break;
-              default:
-                throw std::runtime_error("unsupported EC key curve");
-            }
+            std::string gname = OSSL_EC_curve_nid2name(curve_nid);
             r += "\",";
             const EC_POINT* pnt = EC_KEY_get0_public_key(ec_key);
             BIGNUM *x = BN_new(), *y = BN_new();
             CHECK1(EC_POINT_get_affine_coordinates(grp, pnt, x, y, NULL));
+#endif
+            if (gname == SN_X9_62_prime256v1)
+              r += "P-256";
+            else if (gname == SN_secp384r1)
+              r += "P-384";
+            else if (gname == SN_secp384r1)
+              r += "P-521";
+            else
+              throw std::runtime_error("unsupported EC key curve");
             auto x_len = BN_num_bytes(x);
             auto y_len = BN_num_bytes(y);
             std::vector<uint8_t> xv(x_len), yv(y_len);
