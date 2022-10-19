@@ -485,15 +485,36 @@ namespace didx509
 
           ASN1_OBJECT* oid = X509_NAME_ENTRY_get_object(entry);
           CHECKNULL(oid);
-          auto sn = OBJ_nid2sn(OBJ_obj2nid(oid));
 
-          ASN1_STRING* value = X509_NAME_ENTRY_get_data(entry);
-          CHECKNULL(value);
+          std::string key;
+          std::map<int, std::string> short_name_map = {
+            // As specified by the did-x509 spec
+            {NID_commonName, "CN"},
+            {NID_localityName, "L"},
+            {NID_stateOrProvinceName, "ST"},
+            {NID_organizationName, "O"},
+            {NID_organizationalUnitName, "OU"},
+            {NID_countryName, "C"},
+            {NID_streetAddress, "STREET"},
+          };
+
+          auto snit = short_name_map.find(OBJ_obj2nid(oid));
+          if (snit != short_name_map.end())
+            key = snit->second;
+          else
+          {
+            int sz = OBJ_obj2txt(NULL, 0, oid, 1);
+            key.resize(sz + 1, 0);
+            OBJ_obj2txt((char*)key.data(), key.size(), oid, 1);
+          }
+
+          ASN1_STRING* val_asn1 = X509_NAME_ENTRY_get_data(entry);
+          CHECKNULL(val_asn1);
           UqBIO value_bio;
-          ASN1_STRING_print(value_bio, value);
-          auto value_string = value_bio.to_string();
+          ASN1_STRING_print(value_bio, val_asn1);
+          auto value = value_bio.to_string();
 
-          r[sn].push_back(value_string);
+          r[key].push_back(value);
         }
 
         return r;
