@@ -41,7 +41,7 @@ if(TESTS)
       target_link_options(${NAME} PRIVATE -fsanitize=undefined,address)
     endif()
 
-    add_test(${NAME} ${NAME})
+    add_test(NAME ${NAME} COMMAND ${NAME} ${ARGN})
   endfunction()
 
   add_subdirectory(test)

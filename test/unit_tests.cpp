@@ -5,16 +5,16 @@
 
 #include <string>
 
-#define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
+#define DOCTEST_CONFIG_IMPLEMENT
 #include "doctest.h"
 
 using namespace didx509;
 
-static const std::string test_data_dir = "../test/test-data/";
+static std::string test_data_dir = "../test/test-data";
 
 static std::string load_certificate_chain(const std::string& path)
 {
-  std::ifstream t(test_data_dir + path);
+  std::ifstream t(test_data_dir + "/" + path);
   if (!t.good())
     throw std::runtime_error(std::string("could not open ") + path);
   std::stringstream ss;
@@ -190,4 +190,14 @@ TEST_CASE("TestFulcioIssuerWithURISAN")
     "delivery-lab-files%2F.github%2Fworkflows%2Ffabrikam-web.yml%40refs%"
     "2Fheads%2Fmain",
     true));
+}
+
+int main(int argc, char** argv)
+{
+  doctest::Context ctx;
+  ctx.applyCommandLine(argc, argv);
+  for (size_t i = 0; i < argc; i++)
+    if (strcmp(argv[i], "--data-dir") == 0 && i < argc - 1)
+      test_data_dir = argv[i + 1];
+  return ctx.run();
 }
