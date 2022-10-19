@@ -156,6 +156,16 @@ namespace didx509
       }
     };
 
+    struct UqBIGNUM : public UqSSLOBJECT<BIGNUM, BN_new, BN_free>
+    {
+      UqBIGNUM(const BIGNUM* n) : UqSSLOBJECT(BN_dup(n), BN_free) {}
+
+      UqBIGNUM(UqBIGNUM&& other) : UqSSLOBJECT(nullptr, BN_free, false)
+      {
+        p.reset(other.p.release());
+      }
+    };
+
     struct UqBIO : public UqSSLOBJECT<BIO, nullptr, nullptr>
     {
       UqBIO() : UqSSLOBJECT(BIO_new(BIO_s_mem()), [](auto x) { BIO_free(x); })
@@ -378,6 +388,56 @@ namespace didx509
           throw std::out_of_range("extended key usage index out of range");
         return UqASN1_OBJECT(sk_ASN1_OBJECT_value(*this, i));
       }
+    };
+
+    struct UqX509;
+
+    struct UqEVP_PKEY
+      : public UqSSLOBJECT<EVP_PKEY, EVP_PKEY_new, EVP_PKEY_free>
+    {
+      UqEVP_PKEY(const UqX509& x509);
+
+      UqEVP_PKEY(EVP_PKEY* key);
+
+      UqEVP_PKEY(UqEVP_PKEY&& other) :
+        UqSSLOBJECT(nullptr, EVP_PKEY_free, false)
+      {
+        p.reset(other.p.release());
+      }
+
+      bool operator==(const UqEVP_PKEY& other) const
+      {
+#if defined(OPENSSL_VERSION_MAJOR) && OPENSSL_VERSION_MAJOR >= 3
+        return EVP_PKEY_eq(*this, other) == 1;
+#else
+        return EVP_PKEY_cmp(*this, other) == 1;
+#endif
+      }
+
+      bool operator!=(const UqEVP_PKEY& other) const
+      {
+        return !(*this == other);
+      }
+
+      bool verify_signature(
+        const std::vector<uint8_t>& message,
+        const std::vector<uint8_t>& signature) const;
+
+      UqBIGNUM get_bn_param(const char* key_name) const
+      {
+        BIGNUM* bn = NULL;
+        CHECK1(EVP_PKEY_get_bn_param(*this, key_name, &bn));
+        UqBIGNUM r(bn);
+        BN_free(bn);
+        return r;
+      }
+    };
+
+    struct UqEVP_PKEY_CTX : public UqSSLOBJECT<EVP_PKEY_CTX, nullptr, nullptr>
+    {
+      UqEVP_PKEY_CTX(int nid) :
+        UqSSLOBJECT(EVP_PKEY_CTX_new_id(nid, NULL), EVP_PKEY_CTX_free)
+      {}
     };
 
     struct UqX509 : public UqSSLOBJECT<X509, X509_new, X509_free>
@@ -614,22 +674,26 @@ namespace didx509
         return mem.to_vector();
       }
 
+      UqEVP_PKEY public_key() const
+      {
+        return X509_get0_pubkey(*this);
+      }
+
       std::string public_jwk() const
       {
         std::string r = "{";
 
-        auto pk = X509_get0_pubkey(*this);
+        UqEVP_PKEY pk = X509_get0_pubkey(*this);
         auto base_id = EVP_PKEY_base_id(pk);
         switch (base_id)
         {
           case EVP_PKEY_RSA: {
             r += "kty:\"RSA\",";
-
 #if defined(OPENSSL_VERSION_MAJOR) && OPENSSL_VERSION_MAJOR >= 3
-            BIGNUM *n = NULL, *e = NULL;
-            EVP_PKEY_CTX* ek_ctx = EVP_PKEY_CTX_new_id(EVP_PKEY_RSA, NULL);
-            EVP_PKEY_get_bn_param(pk, OSSL_PKEY_PARAM_RSA_N, &n);
-            EVP_PKEY_get_bn_param(pk, OSSL_PKEY_PARAM_RSA_E, &e);
+
+            UqEVP_PKEY_CTX ek_ctx(EVP_PKEY_RSA);
+            auto n = pk.get_bn_param(OSSL_PKEY_PARAM_RSA_N);
+            auto e = pk.get_bn_param(OSSL_PKEY_PARAM_RSA_E);
 #else
             auto rsa = EVP_PKEY_get0_RSA(pk);
             const BIGNUM *n = NULL, *e = NULL, *d = NULL;
@@ -643,6 +707,8 @@ namespace didx509
             r += "\"n\":\"" + to_base64url(nv) + "\",";
             r += "\"e\":\"" + to_base64url(ev) + "\"";
             break;
+            BN_free(n);
+            BN_free(e);
           }
           case EVP_PKEY_EC: {
             r += "\"kty\":\"EC\",";
@@ -701,6 +767,14 @@ namespace didx509
       }
     };
 
+    inline UqEVP_PKEY::UqEVP_PKEY(const UqX509& x509) :
+      UqSSLOBJECT(X509_get_pubkey(x509), EVP_PKEY_free)
+    {}
+
+    inline UqEVP_PKEY::UqEVP_PKEY(EVP_PKEY* key) :
+      UqSSLOBJECT(EVP_PKEY_dup(key), EVP_PKEY_free)
+    {}
+
     struct UqX509_NAME
       : public UqSSLOBJECT<X509_NAME, X509_NAME_new, X509_NAME_free>
     {
@@ -734,32 +808,6 @@ namespace didx509
       }
       return false;
     }
-
-    struct UqEVP_PKEY
-      : public UqSSLOBJECT<EVP_PKEY, EVP_PKEY_new, EVP_PKEY_free>
-    {
-      UqEVP_PKEY(const UqX509& x509) :
-        UqSSLOBJECT(X509_get_pubkey(x509), EVP_PKEY_free)
-      {}
-
-      bool operator==(const UqEVP_PKEY& other) const
-      {
-#if defined(OPENSSL_VERSION_MAJOR) && OPENSSL_VERSION_MAJOR >= 3
-        return EVP_PKEY_eq(*this, other) == 1;
-#else
-        return EVP_PKEY_cmp(*this, other) == 1;
-#endif
-      }
-
-      bool operator!=(const UqEVP_PKEY& other) const
-      {
-        return !(*this == other);
-      }
-
-      bool verify_signature(
-        const std::vector<uint8_t>& message,
-        const std::vector<uint8_t>& signature) const;
-    };
 
     struct UqEVP_MD_CTX
       : public UqSSLOBJECT<EVP_MD_CTX, EVP_MD_CTX_new, EVP_MD_CTX_free>
