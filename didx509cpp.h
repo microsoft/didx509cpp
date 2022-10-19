@@ -657,24 +657,31 @@ namespace didx509
             CHECK1(EVP_PKEY_get_group_name(
               pk, (char*)gname.data(), gname.size(), &gname_len));
             gname.resize(gname_len);
-#else
-            auto ec_key = EVP_PKEY_get0_EC_KEY(pk);
-            const EC_GROUP* grp = EC_KEY_get0_group(ec_key);
-            int curve_nid = EC_GROUP_get_curve_name(grp);
-            std::string gname = OSSL_EC_curve_nid2name(curve_nid);
-            r += "\",";
-            const EC_POINT* pnt = EC_KEY_get0_public_key(ec_key);
-            BIGNUM *x = BN_new(), *y = BN_new();
-            CHECK1(EC_POINT_get_affine_coordinates(grp, pnt, x, y, NULL));
-#endif
             if (gname == SN_X9_62_prime256v1)
               r += "P-256";
             else if (gname == SN_secp384r1)
               r += "P-384";
-            else if (gname == SN_secp384r1)
+            else if (gname == SN_secp521r1)
               r += "P-521";
             else
               throw std::runtime_error("unsupported EC key curve");
+#else
+            auto ec_key = EVP_PKEY_get0_EC_KEY(pk);
+            const EC_GROUP* grp = EC_KEY_get0_group(ec_key);
+            int curve_nid = EC_GROUP_get_curve_name(grp);
+            r += "\",";
+            const EC_POINT* pnt = EC_KEY_get0_public_key(ec_key);
+            BIGNUM *x = BN_new(), *y = BN_new();
+            CHECK1(EC_POINT_get_affine_coordinates(grp, pnt, x, y, NULL));
+            if (curve_nid == NID_X9_62_prime256v1)
+              r += "P-256";
+            else if (curve_nid == NID_secp384r1)
+              r += "P-384";
+            else if (curve_nid == NID_secp521r1)
+              r += "P-521";
+            else
+              throw std::runtime_error("unsupported EC key curve");
+#endif
             auto x_len = BN_num_bytes(x);
             auto y_len = BN_num_bytes(y);
             std::vector<uint8_t> xv(x_len), yv(y_len);
