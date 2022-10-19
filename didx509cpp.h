@@ -839,6 +839,8 @@ namespace didx509
         UqBIO mem(pem);
         STACK_OF(X509_INFO)* sk_info =
           PEM_X509_INFO_read_bio(mem, NULL, NULL, NULL);
+        if (!sk_info)
+          throw std::runtime_error("could not parse PEM chain");
         int sz = sk_X509_INFO_num(sk_info);
         p.reset(sk_X509_new_null());
         for (int i = 0; i < sz; i++)
@@ -862,6 +864,11 @@ namespace didx509
       {
         int r = sk_X509_num(p.get());
         return r == (-1) ? 0 : r;
+      }
+
+      bool empty() const
+      {
+        return size() == 0;
       }
 
       UqX509 at(size_t i) const
@@ -1286,6 +1293,9 @@ namespace didx509
     bool ignore_time = false)
   {
     UqSTACK_OF_X509 chain(chain_pem);
+
+    if (chain.empty())
+      throw std::runtime_error("no certificate chain");
 
     // The last certificate in the chain is assumed to be the trusted root.
     UqX509 root = chain.back();
