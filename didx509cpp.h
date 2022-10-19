@@ -423,6 +423,7 @@ namespace didx509
         const std::vector<uint8_t>& message,
         const std::vector<uint8_t>& signature) const;
 
+#if defined(OPENSSL_VERSION_MAJOR) && OPENSSL_VERSION_MAJOR >= 3
       UqBIGNUM get_bn_param(const char* key_name) const
       {
         BIGNUM* bn = NULL;
@@ -432,6 +433,7 @@ namespace didx509
         return r;
       }
     };
+#endif
 
     struct UqEVP_PKEY_CTX : public UqSSLOBJECT<EVP_PKEY_CTX, nullptr, nullptr>
     {
@@ -690,7 +692,6 @@ namespace didx509
           case EVP_PKEY_RSA: {
             r += "kty:\"RSA\",";
 #if defined(OPENSSL_VERSION_MAJOR) && OPENSSL_VERSION_MAJOR >= 3
-
             UqEVP_PKEY_CTX ek_ctx(EVP_PKEY_RSA);
             auto n = pk.get_bn_param(OSSL_PKEY_PARAM_RSA_N);
             auto e = pk.get_bn_param(OSSL_PKEY_PARAM_RSA_E);
@@ -707,8 +708,6 @@ namespace didx509
             r += "\"n\":\"" + to_base64url(nv) + "\",";
             r += "\"e\":\"" + to_base64url(ev) + "\"";
             break;
-            BN_free(n);
-            BN_free(e);
           }
           case EVP_PKEY_EC: {
             r += "\"kty\":\"EC\",";
