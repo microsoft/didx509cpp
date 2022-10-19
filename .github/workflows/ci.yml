@@ -1,0 +1,81 @@
+name: Continuous Integration
+
+on:
+  push:
+    branches:
+      - main
+      - 'releases/**'
+    tags:
+      - 'didx509cpp-*'
+      - 'v*'
+  pull_request:
+
+jobs:
+  build-test:
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, ubuntu-18.04, ubuntu-22.04]
+        build_type: [Debug, Release]
+        compiler: [clang++-10, clang++-12, g++-11]
+        # include:
+        #   - os: windows-latest
+        #     build_type: Debug
+        #     compiler: msvc
+        #   - os: windows-latest
+        #     build_type: Release
+        #     compiler: msvc
+        exclude:
+          - os: ubuntu-18.04
+            compiler: clang++-12
+          - os: ubuntu-18.04
+            compiler: g++-11
+          - os: ubuntu-22.04
+            compiler: clang++-10
+
+    steps:
+    - name: Install packages
+      run: sudo apt install doctest-dev libcurl4-openssl-dev libssl-dev
+
+    - name: Install clang 12
+      if: matrix.compiler == 'clang++-12'
+      run: sudo apt install clang-12
+
+    - name: Install GCC 11
+      if: matrix.compiler == 'g++-11'
+      run: sudo apt install g++-11 libstdc++-10-dev
+
+    - name: Install clang 10
+      if: matrix.compiler == 'clang++-10'
+      run: sudo apt install clang-10 libc++-10-dev
+
+    - uses: actions/checkout@v3
+
+    - name: Create Build Environment
+      run: cmake -E make_directory ${{github.workspace}}/build/${{ matrix.build_type }}
+
+    - name: Configure CMake
+      # Use a bash shell so we can use the same syntax for environment variable
+      # access regardless of the host operating system
+      shell: bash
+      working-directory: ${{github.workspace}}/build/${{ matrix.build_type }}
+      # Note the current convention is to use the -S and -B options here to specify source
+      # and build directories, but this is only available with CMake 3.13 and higher.
+      # The CMake binaries on the Github Actions machines are (as of this writing) 3.12
+      run: |
+        if [ "$RUNNER_OS" == "Linux" ]; then
+          cmake $GITHUB_WORKSPACE -DCMAKE_CXX_COMPILER=${{ matrix.compiler }} -DCMAKE_BUILD_TYPE=${{ matrix.build_type }} -DTESTS=ON
+        else
+          cmake $GITHUB_WORKSPACE -DCMAKE_BUILD_TYPE=${{ matrix.build_type }} -DTESTS=ON
+        fi
+
+    - name: Build
+      working-directory: ${{github.workspace}}/build/${{ matrix.build_type }}
+      shell: bash
+      run: cmake --build . --config ${{ matrix.build_type }}
+
+    - name: Test
+      working-directory: ${{github.workspace}}/build/${{ matrix.build_type }}
+      shell: bash
+      run: ctest -C ${{ matrix.build_type }} -VV
