@@ -16,7 +16,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, ubuntu-18.04, ubuntu-22.04]
+        os: [ubuntu-18.04, ubuntu-20.04, ubuntu-22.04]
         build_type: [Debug, Release]
         compiler: [clang++-10, clang++-12, g++-11]
         # include:
@@ -36,7 +36,9 @@ jobs:
 
     steps:
     - name: Install packages
-      run: sudo apt install doctest-dev libcurl4-openssl-dev libssl-dev
+      run: |
+        sudo apt update
+        sudo apt install doctest-dev libcurl4-openssl-dev libssl-dev
 
     - name: Install clang 12
       if: matrix.compiler == 'clang++-12'
