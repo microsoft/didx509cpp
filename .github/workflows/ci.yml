@@ -36,7 +36,9 @@ jobs:
 
     steps:
     - name: Install packages
-      run: sudo apt install doctest-dev libcurl4-openssl-dev libssl-dev
+      run: |
+        sudo apt update
+        sudo apt install doctest-dev libcurl4-openssl-dev libssl-dev
 
     - name: Install clang 12
       if: matrix.compiler == 'clang++-12'
