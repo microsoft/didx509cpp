@@ -16,7 +16,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, ubuntu-18.04, ubuntu-22.04]
+        os: [ubuntu-22.04, ubuntu-18.04, ubuntu-20.04]
         build_type: [Debug, Release]
         compiler: [clang++-10, clang++-12, g++-11]
         # include:
