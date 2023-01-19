@@ -31,23 +31,26 @@ void test_resolve_success(const std::string& chain, const std::string& did)
   REQUIRE_NOTHROW(auto _ = nlohmann::json::parse(jwk));
 }
 
-void test_resolve_error(const std::string& chain, const std::string& did)
+void test_resolve_error(
+  const std::string& chain,
+  const std::string& did,
+  const doctest::String& error_msg)
 {
-  REQUIRE_THROWS(resolve(chain, did, true));
+  REQUIRE_THROWS_WITH(resolve(chain, did, true), doctest::Contains(error_msg));
 }
 
 TEST_CASE("Wrong prefix")
 {
   auto chain = load_certificate_chain("ms-code-signing.pem");
   auto did = "djd:y508:1:abcd::";
-  test_resolve_error(chain, did);
+  test_resolve_error(chain, did, "unsupported method/prefix");
 }
 
 TEST_CASE("Empty chain")
 {
   auto chain = "";
   auto did = "djd:y508:1:abcd::";
-  test_resolve_error(chain, did);
+  test_resolve_error(chain, did, "no certificate chain");
 }
 
 TEST_CASE("TestRootCA")
@@ -72,14 +75,14 @@ TEST_CASE("TestInvalidLeafCA")
 {
   auto chain = load_certificate_chain("ms-code-signing.pem");
   auto did = "did:x509:0:sha256:h::subject:CN:Microsoft%20Corporation";
-  test_resolve_error(chain, did);
+  test_resolve_error(chain, did, "invalid certificate fingerprint");
 }
 
 TEST_CASE("TestInvalidCA")
 {
   auto chain = load_certificate_chain("ms-code-signing.pem");
   auto did = "did:x509:0:sha256:abc::CN:Microsoft%20Corporation";
-  test_resolve_error(chain, did);
+  test_resolve_error(chain, did, "invalid certificate fingerprint");
 }
 
 TEST_CASE("TestMultiplePolicies")
@@ -107,7 +110,7 @@ TEST_CASE("TestSubjectInvalidName")
   auto did =
     "did:x509:0:sha256:hH32p4SXlD8n_HLrk_mmNzIKArVh0KkbCeh6eAftfGE"
     "::subject:CN:MicrosoftCorporation";
-  test_resolve_error(chain, did);
+  test_resolve_error(chain, did, "invalid subject key/value");
 }
 
 TEST_CASE("TestSubjectDuplicateField")
@@ -116,7 +119,7 @@ TEST_CASE("TestSubjectDuplicateField")
   auto did =
     "did:x509:0:sha256:hH32p4SXlD8n_HLrk_mmNzIKArVh0KkbCeh6eAftfGE"
     "::subject:CN:Microsoft%20Corporation:CN:Microsoft%20Corporation";
-  test_resolve_error(chain, did);
+  test_resolve_error(chain, did, "duplicate field");
 }
 
 TEST_CASE("TestSAN")
@@ -134,7 +137,7 @@ TEST_CASE("TestSANInvalidType")
   auto did =
     "did:x509:0:sha256:O6e2zE6VRp1NM0tJyyV62FNwdvqEsMqH_07P5qVGgME"
     "::san:uri:igarcia%40suse.com";
-  test_resolve_error(chain, did);
+  test_resolve_error(chain, did, "SAN not found");
 }
 
 TEST_CASE("TestSANInvalidValue")
@@ -143,7 +146,7 @@ TEST_CASE("TestSANInvalidValue")
   auto did =
     "did:x509:0:sha256:O6e2zE6VRp1NM0tJyyV62FNwdvqEsMqH_07P5qVGgME"
     "::email:bob%40example.com";
-  test_resolve_error(chain, did);
+  test_resolve_error(chain, did, "unsupported did:x509 scheme");
 }
 
 TEST_CASE("TestBadEKU")
@@ -152,7 +155,7 @@ TEST_CASE("TestBadEKU")
   auto did =
     "did:x509:0:sha256:hH32p4SXlD8n_HLrk_mmNzIKArVh0KkbCeh6eAftfGE"
     "::eku:1.3.6.1.5.5.7.3.12";
-  test_resolve_error(chain, did);
+  test_resolve_error(chain, did, "EKU not found");
 }
 
 TEST_CASE("TestGoodEKU")
@@ -170,7 +173,7 @@ TEST_CASE("TestEKUInvalidValue")
   auto did =
     "did:x509:0:sha256:hH32p4SXlD8n_HLrk_mmNzIKArVh0KkbCeh6eAftfGE"
     "::eku:1.2.3";
-  test_resolve_error(chain, did);
+  test_resolve_error(chain, did, "EKU not found");
 }
 
 TEST_CASE("TestFulcioIssuerWithEmailSAN")
@@ -193,6 +196,18 @@ TEST_CASE("TestFulcioIssuerWithURISAN")
     "delivery-lab-files%2F.github%2Fworkflows%2Ffabrikam-web.yml%40refs%"
     "2Fheads%2Fmain";
   test_resolve_success(chain, did);
+}
+
+TEST_CASE("TestInvalidLeafOnly")
+{
+  auto chain = load_certificate_chain("containerplat-leaf.pem");
+  REQUIRE_THROWS_WITH(
+    resolve(
+      chain,
+      "did:x509:0:sha256:pDI-AL3g4rw3cHMC_dmMKpdzFF8JMFzWvfIzbK9_DbQ"
+      "::eku:1.3.6.1.4.1.311.76.59.1.2",
+      true),
+    doctest::Contains("certificate chain too short"));
 }
 
 int main(int argc, char** argv)
