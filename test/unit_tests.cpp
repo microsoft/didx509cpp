@@ -178,7 +178,8 @@ TEST_CASE("TestFulcioIssuerWithEmailSAN")
   auto chain = load_certificate_chain("fulcio-email.pem");
   auto did =
     "did:x509:0:sha256:O6e2zE6VRp1NM0tJyyV62FNwdvqEsMqH_07P5qVGgME"
-    "::fulcio-issuer:github.com%2Flogin%2Foauth";
+    "::fulcio-issuer:github.com%2Flogin%2Foauth"
+    "::san:email:igarcia%40suse.com";
   test_resolve_success(chain, did);
 }
 
