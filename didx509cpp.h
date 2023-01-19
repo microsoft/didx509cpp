@@ -745,8 +745,8 @@ namespace didx509
               r += "P-521";
             else
               throw std::runtime_error("unsupported EC key curve");
-            r += "\",";
 #endif
+            r += "\",";
             auto x_len = BN_num_bytes(x);
             auto y_len = BN_num_bytes(y);
             std::vector<uint8_t> xv(x_len), yv(y_len);
