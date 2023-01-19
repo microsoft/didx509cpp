@@ -690,7 +690,7 @@ namespace didx509
         switch (base_id)
         {
           case EVP_PKEY_RSA: {
-            r += "kty:\"RSA\",";
+            r += "\"kty\":\"RSA\",";
 #if defined(OPENSSL_VERSION_MAJOR) && OPENSSL_VERSION_MAJOR >= 3
             UqEVP_PKEY_CTX ek_ctx(EVP_PKEY_RSA);
             auto n = pk.get_bn_param(OSSL_PKEY_PARAM_RSA_N);
@@ -734,7 +734,6 @@ namespace didx509
             auto ec_key = EVP_PKEY_get0_EC_KEY(pk);
             const EC_GROUP* grp = EC_KEY_get0_group(ec_key);
             int curve_nid = EC_GROUP_get_curve_name(grp);
-            r += "\",";
             const EC_POINT* pnt = EC_KEY_get0_public_key(ec_key);
             BIGNUM *x = BN_new(), *y = BN_new();
             CHECK1(EC_POINT_get_affine_coordinates(grp, pnt, x, y, NULL));
@@ -747,6 +746,7 @@ namespace didx509
             else
               throw std::runtime_error("unsupported EC key curve");
 #endif
+            r += "\",";
             auto x_len = BN_num_bytes(x);
             auto y_len = BN_num_bytes(y);
             std::vector<uint8_t> xv(x_len), yv(y_len);
@@ -1293,9 +1293,7 @@ namespace didx509
     inline std::string create_did_document(
       const std::string& did, const UqSTACK_OF_X509& chain)
     {
-      std::string format = R"(
-{
-  {
+      std::string format = R"({
     "@context": "https://www.w3.org/ns/did/v1",
     "id": "_DID_",
     "verificationMethod": [{
@@ -1306,7 +1304,6 @@ namespace didx509
     }]
     _ASSERTION_METHOD_
     _KEY_AGREEMENT_
-  }
 })";
 
       const auto& leaf = chain.front();
