@@ -25,12 +25,14 @@ static std::string load_certificate_chain(const std::string& path)
 TEST_CASE("Wrong prefix")
 {
   auto chain = load_certificate_chain("ms-code-signing.pem");
-  REQUIRE_THROWS(resolve(chain, "djd:y508:1:abcd::", true));
+  REQUIRE_THROWS_WITH(resolve(chain, "djd:y508:1:abcd::", true),
+    doctest::Contains("unsupported method/prefix"));
 }
 
 TEST_CASE("Empty chain")
 {
-  REQUIRE_THROWS(resolve("", "djd:y508:1:abcd::", true));
+  REQUIRE_THROWS_WITH(resolve("", "djd:y508:1:abcd::", true),
+    doctest::Contains("no certificate chain"));
 }
 
 TEST_CASE("TestRootCA")
@@ -56,15 +58,17 @@ TEST_CASE("TestIntermediateCA")
 TEST_CASE("TestInvalidLeafCA")
 {
   auto chain = load_certificate_chain("ms-code-signing.pem");
-  REQUIRE_THROWS(resolve(
-    chain, "did:x509:0:sha256:h::subject:CN:Microsoft%20Corporation", true));
+  REQUIRE_THROWS_WITH(resolve(
+    chain, "did:x509:0:sha256:h::subject:CN:Microsoft%20Corporation", true),
+    doctest::Contains("invalid certificate fingerprint"));
 }
 
 TEST_CASE("TestInvalidCA")
 {
   auto chain = load_certificate_chain("ms-code-signing.pem");
-  REQUIRE_THROWS(
-    resolve(chain, "did:x509:0:sha256:abc::CN:Microsoft%20Corporation", true));
+  REQUIRE_THROWS_WITH(
+    resolve(chain, "did:x509:0:sha256:abc::CN:Microsoft%20Corporation", true),
+    doctest::Contains("invalid certificate fingerprint"));
 }
 
 TEST_CASE("TestMultiplePolicies")
@@ -91,21 +95,23 @@ TEST_CASE("TestSubject")
 TEST_CASE("TestSubjectInvalidName")
 {
   auto chain = load_certificate_chain("ms-code-signing.pem");
-  REQUIRE_THROWS(resolve(
+  REQUIRE_THROWS_WITH(resolve(
     chain,
     "did:x509:0:sha256:hH32p4SXlD8n_HLrk_mmNzIKArVh0KkbCeh6eAftfGE"
     "::subject:CN:MicrosoftCorporation",
-    true));
+    true),
+    doctest::Contains("invalid subject key/value"));
 }
 
 TEST_CASE("TestSubjectDuplicateField")
 {
   auto chain = load_certificate_chain("ms-code-signing.pem");
-  REQUIRE_THROWS(resolve(
+  REQUIRE_THROWS_WITH(resolve(
     chain,
     "did:x509:0:sha256:hH32p4SXlD8n_HLrk_mmNzIKArVh0KkbCeh6eAftfGE"
     "::subject:CN:Microsoft%20Corporation:CN:Microsoft%20Corporation",
-    true));
+    true),
+    doctest::Contains("duplicate field"));
 }
 
 TEST_CASE("TestSAN")
@@ -121,31 +127,34 @@ TEST_CASE("TestSAN")
 TEST_CASE("TestSANInvalidType")
 {
   auto chain = load_certificate_chain("fulcio-email.pem");
-  REQUIRE_THROWS(resolve(
+  REQUIRE_THROWS_WITH(resolve(
     chain,
     "did:x509:0:sha256:O6e2zE6VRp1NM0tJyyV62FNwdvqEsMqH_07P5qVGgME"
     "::san:uri:igarcia%40suse.com",
-    true));
+    true),
+    doctest::Contains("SAN not found"));
 }
 
 TEST_CASE("TestSANInvalidValue")
 {
   auto chain = load_certificate_chain("fulcio-email.pem");
-  REQUIRE_THROWS(resolve(
+  REQUIRE_THROWS_WITH(resolve(
     chain,
     "did:x509:0:sha256:O6e2zE6VRp1NM0tJyyV62FNwdvqEsMqH_07P5qVGgME"
     "::email:bob%40example.com",
-    true));
+    true),
+    doctest::Contains("unsupported did:x509 scheme"));
 }
 
 TEST_CASE("TestBadEKU")
 {
   auto chain = load_certificate_chain("ms-code-signing.pem");
-  REQUIRE_THROWS(resolve(
+  REQUIRE_THROWS_WITH(resolve(
     chain,
     "did:x509:0:sha256:hH32p4SXlD8n_HLrk_mmNzIKArVh0KkbCeh6eAftfGE"
     "::eku:1.3.6.1.5.5.7.3.12",
-    true));
+    true),
+    doctest::Contains("EKU not found"));
 }
 
 TEST_CASE("TestGoodEKU")
@@ -161,11 +170,12 @@ TEST_CASE("TestGoodEKU")
 TEST_CASE("TestEKUInvalidValue")
 {
   auto chain = load_certificate_chain("ms-code-signing.pem");
-  REQUIRE_THROWS(resolve(
+  REQUIRE_THROWS_WITH(resolve(
     chain,
     "did:x509:0:sha256:hH32p4SXlD8n_HLrk_mmNzIKArVh0KkbCeh6eAftfGE"
     "::eku:1.2.3",
-    true));
+    true),
+    doctest::Contains("EKU not found"));
 }
 
 TEST_CASE("TestFulcioIssuerWithEmailSAN")
@@ -190,6 +200,16 @@ TEST_CASE("TestFulcioIssuerWithURISAN")
     "delivery-lab-files%2F.github%2Fworkflows%2Ffabrikam-web.yml%40refs%"
     "2Fheads%2Fmain",
     true));
+}
+
+TEST_CASE("TestInvalidLeafOnly")
+{
+  auto chain = load_certificate_chain("containerplat-leaf.pem");
+  REQUIRE_THROWS_WITH(resolve(
+    chain,
+    "did:x509:0:sha256:pDI-AL3g4rw3cHMC_dmMKpdzFF8JMFzWvfIzbK9_DbQ"
+    "::eku:1.3.6.1.4.1.311.76.59.1.2",
+    true), doctest::Contains("certificate chain too short"));
 }
 
 int main(int argc, char** argv)
