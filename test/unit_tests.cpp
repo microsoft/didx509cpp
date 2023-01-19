@@ -28,7 +28,6 @@ void test_resolve_success(const std::string& chain, const std::string& did)
   std::string jwk;
   REQUIRE_NOTHROW(jwk = resolve(chain, did, true));
   // Verify that resolved JWK is valid JSON
-  std::cout << jwk << std::endl; // TODO: Remove
   REQUIRE_NOTHROW(auto _ = nlohmann::json::parse(jwk));
 }
 
