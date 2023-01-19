@@ -7,7 +7,7 @@
 
 #define DOCTEST_CONFIG_IMPLEMENT
 #include "doctest.h"
-#include "nlohmann/json.hpp"
+#include "json.hpp"
 
 using namespace didx509;
 
