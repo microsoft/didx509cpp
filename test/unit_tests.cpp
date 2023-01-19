@@ -23,38 +23,31 @@ static std::string load_certificate_chain(const std::string& path)
   return ss.str();
 }
 
-void test_resolve(
-  const std::string& chain,
-  const std::string& did,
-  bool ignore_time = false,
-  bool expect_success = true)
+void test_resolve_success(const std::string& chain, const std::string& did)
 {
-  if (expect_success)
-  {
-    std::string jwk;
-    REQUIRE_NOTHROW(jwk = resolve(chain, did, ignore_time));
-    std::cout << jwk << std::endl; // TODO: Delete
-    // Verify that resolved JWK is valid JSON
-    REQUIRE_NOTHROW(auto _ = nlohmann::json::parse(jwk));
-  }
-  else
-  {
-    REQUIRE_THROWS(resolve(chain, did, ignore_time));
-  }
+  std::string jwk;
+  REQUIRE_NOTHROW(jwk = resolve(chain, did, true));
+  // Verify that resolved JWK is valid JSON
+  REQUIRE_NOTHROW(auto _ = nlohmann::json::parse(jwk));
+}
+
+void test_resolve_error(const std::string& chain, const std::string& did)
+{
+  REQUIRE_THROWS(resolve(chain, did, true));
 }
 
 TEST_CASE("Wrong prefix")
 {
   auto chain = load_certificate_chain("ms-code-signing.pem");
   auto did = "djd:y508:1:abcd::";
-  test_resolve(chain, did, true, false);
+  test_resolve_error(chain, did);
 }
 
 TEST_CASE("Empty chain")
 {
   auto chain = "";
   auto did = "djd:y508:1:abcd::";
-  test_resolve(chain, did, true, false);
+  test_resolve_error(chain, did);
 }
 
 TEST_CASE("TestRootCA")
@@ -63,7 +56,7 @@ TEST_CASE("TestRootCA")
   auto did =
     "did:x509:0:sha256:hH32p4SXlD8n_HLrk_mmNzIKArVh0KkbCeh6eAftfGE"
     "::subject:CN:Microsoft%20Corporation";
-  test_resolve(chain, did, true);
+  test_resolve_success(chain, did);
 }
 
 TEST_CASE("TestIntermediateCA")
@@ -72,21 +65,21 @@ TEST_CASE("TestIntermediateCA")
   auto did =
     "did:x509:0:sha256:VtqHIq_ZQGb_4eRZVHOkhUiSuEOggn1T-32PSu7R4Ys"
     "::subject:CN:Microsoft%20Corporation";
-  test_resolve(chain, did, true);
+  test_resolve_success(chain, did);
 }
 
 TEST_CASE("TestInvalidLeafCA")
 {
   auto chain = load_certificate_chain("ms-code-signing.pem");
   auto did = "did:x509:0:sha256:h::subject:CN:Microsoft%20Corporation";
-  test_resolve(chain, did, true, false);
+  test_resolve_error(chain, did);
 }
 
 TEST_CASE("TestInvalidCA")
 {
   auto chain = load_certificate_chain("ms-code-signing.pem");
   auto did = "did:x509:0:sha256:abc::CN:Microsoft%20Corporation";
-  test_resolve(chain, did, true, false);
+  test_resolve_error(chain, did);
 }
 
 TEST_CASE("TestMultiplePolicies")
@@ -96,7 +89,7 @@ TEST_CASE("TestMultiplePolicies")
     "did:x509:0:sha256:hH32p4SXlD8n_HLrk_mmNzIKArVh0KkbCeh6eAftfGE"
     "::eku:1.3.6.1.5.5.7.3.3"
     "::eku:1.3.6.1.4.1.311.10.3.21";
-  test_resolve(chain, did, true);
+  test_resolve_success(chain, did);
 }
 
 TEST_CASE("TestSubject")
@@ -105,7 +98,7 @@ TEST_CASE("TestSubject")
   auto did =
     "did:x509:0:sha256:hH32p4SXlD8n_HLrk_mmNzIKArVh0KkbCeh6eAftfGE"
     "::subject:CN:Microsoft%20Corporation";
-  test_resolve(chain, did, true);
+  test_resolve_success(chain, did);
 }
 
 TEST_CASE("TestSubjectInvalidName")
@@ -114,7 +107,7 @@ TEST_CASE("TestSubjectInvalidName")
   auto did =
     "did:x509:0:sha256:hH32p4SXlD8n_HLrk_mmNzIKArVh0KkbCeh6eAftfGE"
     "::subject:CN:MicrosoftCorporation";
-  test_resolve(chain, did, true, false);
+  test_resolve_error(chain, did);
 }
 
 TEST_CASE("TestSubjectDuplicateField")
@@ -123,7 +116,7 @@ TEST_CASE("TestSubjectDuplicateField")
   auto did =
     "did:x509:0:sha256:hH32p4SXlD8n_HLrk_mmNzIKArVh0KkbCeh6eAftfGE"
     "::subject:CN:Microsoft%20Corporation:CN:Microsoft%20Corporation";
-  test_resolve(chain, did, true, false);
+  test_resolve_error(chain, did);
 }
 
 TEST_CASE("TestSAN")
@@ -132,7 +125,7 @@ TEST_CASE("TestSAN")
   auto did =
     "did:x509:0:sha256:O6e2zE6VRp1NM0tJyyV62FNwdvqEsMqH_07P5qVGgME"
     "::san:email:igarcia%40suse.com";
-  test_resolve(chain, did, true);
+  test_resolve_success(chain, did);
 }
 
 TEST_CASE("TestSANInvalidType")
@@ -141,7 +134,7 @@ TEST_CASE("TestSANInvalidType")
   auto did =
     "did:x509:0:sha256:O6e2zE6VRp1NM0tJyyV62FNwdvqEsMqH_07P5qVGgME"
     "::san:uri:igarcia%40suse.com";
-  test_resolve(chain, did, true, false);
+  test_resolve_error(chain, did);
 }
 
 TEST_CASE("TestSANInvalidValue")
@@ -150,7 +143,7 @@ TEST_CASE("TestSANInvalidValue")
   auto did =
     "did:x509:0:sha256:O6e2zE6VRp1NM0tJyyV62FNwdvqEsMqH_07P5qVGgME"
     "::email:bob%40example.com";
-  test_resolve(chain, did, true, false);
+  test_resolve_error(chain, did);
 }
 
 TEST_CASE("TestBadEKU")
@@ -159,7 +152,7 @@ TEST_CASE("TestBadEKU")
   auto did =
     "did:x509:0:sha256:hH32p4SXlD8n_HLrk_mmNzIKArVh0KkbCeh6eAftfGE"
     "::eku:1.3.6.1.5.5.7.3.12";
-  test_resolve(chain, did, true, false);
+  test_resolve_error(chain, did);
 }
 
 TEST_CASE("TestGoodEKU")
@@ -168,7 +161,7 @@ TEST_CASE("TestGoodEKU")
   auto did =
     "did:x509:0:sha256:hH32p4SXlD8n_HLrk_mmNzIKArVh0KkbCeh6eAftfGE"
     "::eku:1.3.6.1.4.1.311.10.3.21";
-  test_resolve(chain, did, true);
+  test_resolve_success(chain, did);
 }
 
 TEST_CASE("TestEKUInvalidValue")
@@ -177,7 +170,7 @@ TEST_CASE("TestEKUInvalidValue")
   auto did =
     "did:x509:0:sha256:hH32p4SXlD8n_HLrk_mmNzIKArVh0KkbCeh6eAftfGE"
     "::eku:1.2.3";
-  test_resolve(chain, did, true, false);
+  test_resolve_error(chain, did);
 }
 
 TEST_CASE("TestFulcioIssuerWithEmailSAN")
@@ -186,7 +179,7 @@ TEST_CASE("TestFulcioIssuerWithEmailSAN")
   auto did =
     "did:x509:0:sha256:O6e2zE6VRp1NM0tJyyV62FNwdvqEsMqH_07P5qVGgME"
     "::fulcio-issuer:github.com%2Flogin%2Foauth";
-  test_resolve(chain, did, true);
+  test_resolve_success(chain, did);
 }
 
 TEST_CASE("TestFulcioIssuerWithURISAN")
@@ -198,7 +191,7 @@ TEST_CASE("TestFulcioIssuerWithURISAN")
     "::san:uri:https%3A%2F%2Fgithub.com%2Fbrendancassells%2Fmcw-continuous-"
     "delivery-lab-files%2F.github%2Fworkflows%2Ffabrikam-web.yml%40refs%"
     "2Fheads%2Fmain";
-  test_resolve(chain, did, true);
+  test_resolve_success(chain, did);
 }
 
 int main(int argc, char** argv)
