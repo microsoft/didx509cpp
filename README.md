@@ -2,18 +2,28 @@
 
 A header-only C++ library for verification of DID:x509 identifiers.
 
+[![Continuous Integration](https://github.com/microsoft/didx509cpp/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/microsoft/didx509cpp/actions/workflows/ci.yml) [![CodeQL](https://github.com/microsoft/didx509cpp/actions/workflows/codeql-analysis.yml/badge.svg?branch=main)](https://github.com/microsoft/didx509cpp/actions/workflows/codeql-analysis.yml)
+
 ## Usage
 
-    #include <didx509cpp.h>
+```cpp
+#include <didx509cpp.h>
 
-    std::string pem_chain = ...;
-    std::string did = "did:x509:0:sha256:WE4P5dd8DnLHSkyHaIjhp4udlkF9LqoKwCvu9gl38jk::eku:1.3.6.1.4.1.311.10.3.13";
+std::string pem_chain = ...;
+std::string did = "did:x509:0:sha256:WE4P5dd8DnLHSkyHaIjhp4udlkF9LqoKwCvu9gl38jk::eku:1.3.6.1.4.1.311.10.3.13";
 
-    try {
-        std::string doc = resolve(pem_chain, did));
-    } catch (...)
-    {...}
-
+try {
+    std::string doc = resolve(pem_chain, did));
+} catch (...)
+{...}
+    
+// Or when resolving a historical did, for example for audit purposes
+    
+try {
+    std::string doc = resolve(pem_chain, did, true /* Ignore time */));
+} catch (...)
+{...}
+```
 
 ## Contributing
 
