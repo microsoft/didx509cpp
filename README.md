@@ -1,6 +1,6 @@
 # didx509cpp
 
-A header-only C++ library for verification of DID:x509 identifiers.
+A header-only C++ library for verification of [did:x509](https://github.com/microsoft/did-x509) identifiers.
 
 [![Continuous Integration](https://github.com/microsoft/didx509cpp/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/microsoft/didx509cpp/actions/workflows/ci.yml) [![CodeQL](https://github.com/microsoft/didx509cpp/actions/workflows/codeql-analysis.yml/badge.svg?branch=main)](https://github.com/microsoft/didx509cpp/actions/workflows/codeql-analysis.yml)
 
