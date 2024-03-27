@@ -86,7 +86,7 @@ namespace didx509
 
     inline std::string to_base64(const std::vector<uint8_t>& bytes)
     {
-      size_t r_sz = 4 * ((bytes.size() + 2) / 3);
+      int r_sz = 4 * ((bytes.size() + 2) / 3);
       std::string r(r_sz, 0);
       auto out_sz =
         EVP_EncodeBlock((unsigned char*)r.data(), bytes.data(), bytes.size());
@@ -1198,10 +1198,10 @@ namespace didx509
             throw std::runtime_error("at least one key-value pair is required");
 
           std::unordered_set<std::string> seen_fields;
-          for (size_t i = 0; i < args.size(); i += 2)
+          for (size_t j = 0; j < args.size(); j += 2)
           {
-            const auto& k = args[i];
-            const auto& v = url_unescape(args[i + 1]);
+            const auto& k = args[j];
+            const auto& v = url_unescape(args[j + 1]);
 
             if (seen_fields.find(k) != seen_fields.end())
               throw std::runtime_error(
@@ -1251,11 +1251,11 @@ namespace didx509
 
           bool found_eku = false;
           auto eku_exts = chain.at(0).extended_key_usage();
-          for (size_t i = 0; i < eku_exts.size() && !found_eku; i++)
+          for (size_t k = 0; k < eku_exts.size() && !found_eku; k++)
           {
-            const auto& eku_ext_i = eku_exts.at(i);
-            for (size_t j = 0; j < eku_ext_i.size() && !found_eku; j++)
-              if (eku_ext_i.at(j) == oid)
+            const auto& eku_ext_k = eku_exts.at(k);
+            for (size_t j = 0; j < eku_ext_k.size() && !found_eku; j++)
+              if (eku_ext_k.at(j) == oid)
                 found_eku = true;
           }
           if (!found_eku)
