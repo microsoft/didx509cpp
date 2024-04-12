@@ -1008,8 +1008,8 @@ namespace didx509
         if (no_auth_key_id_ok)
         {
           X509_STORE_CTX_set_verify_cb(
-            store_ctx, [](int ok, X509_STORE_CTX* store_ctx) {
-              int ec = X509_STORE_CTX_get_error(store_ctx);
+            store_ctx, [](int ok, X509_STORE_CTX* ctx) {
+              int ec = X509_STORE_CTX_get_error(ctx);
               if (ec == X509_V_ERR_MISSING_AUTHORITY_KEY_IDENTIFIER)
                 return 1;
               return ok;
