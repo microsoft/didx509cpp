@@ -23,7 +23,7 @@ jobs:
           - os: ubuntu-22.04
             compiler: clang++-10
           - os: ubuntu-20.04
-            compiler: clang++-10
+            compiler: clang++-15
 
     steps:
     - name: Install packages
