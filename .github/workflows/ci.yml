@@ -18,17 +18,12 @@ jobs:
       matrix:
         os: [ubuntu-20.04, ubuntu-22.04]
         build_type: [Debug, Release]
-        compiler: [clang++-10, clang++-12, g++-11]
-        # include:
-        #   - os: windows-latest
-        #     build_type: Debug
-        #     compiler: msvc
-        #   - os: windows-latest
-        #     build_type: Release
-        #     compiler: msvc
+        compiler: [clang++-10, clang++-12, clang++-15]
         exclude:
           - os: ubuntu-22.04
             compiler: clang++-10
+          - os: ubuntu-20.04
+            compiler: clang++-15
 
     steps:
     - name: Install packages
@@ -36,19 +31,19 @@ jobs:
         sudo apt update
         sudo apt install libcurl4-openssl-dev libssl-dev
 
+    - name: Install clang 15
+      if: matrix.compiler == 'clang++-15'
+      run: sudo apt install clang-15
+
     - name: Install clang 12
       if: matrix.compiler == 'clang++-12'
       run: sudo apt install clang-12
-
-    - name: Install GCC 11
-      if: matrix.compiler == 'g++-11'
-      run: sudo apt install g++-11 libstdc++-10-dev
 
     - name: Install clang 10
       if: matrix.compiler == 'clang++-10'
       run: sudo apt install clang-10 libc++-10-dev
 
-    - uses: actions/checkout@v3
+    - uses: actions/checkout@v4
 
     - name: Create Build Environment
       run: cmake -E make_directory ${{github.workspace}}/build/${{ matrix.build_type }}
