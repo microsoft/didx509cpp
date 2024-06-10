@@ -9,7 +9,8 @@ on:
   # schedule:
   #   - cron: '22 12 * * 1'
 
-permissions: read-all
+permissions:
+    security-events: write
 
 jobs:
   analyze:
