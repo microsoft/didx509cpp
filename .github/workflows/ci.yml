@@ -16,13 +16,13 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-20.04, ubuntu-22.04]
+        os: [ubuntu-22.04, ubuntu-24.04]
         build_type: [Debug, Release]
-        compiler: [clang++-10, clang++-12, clang++-15]
+        compiler: [clang++-15, clang++-18]
         exclude:
           - os: ubuntu-22.04
-            compiler: clang++-10
-          - os: ubuntu-20.04
+            compiler: clang++-18
+          - os: ubuntu-24.04
             compiler: clang++-15
 
     steps:
@@ -35,13 +35,9 @@ jobs:
       if: matrix.compiler == 'clang++-15'
       run: sudo apt install clang-15
 
-    - name: Install clang 12
-      if: matrix.compiler == 'clang++-12'
-      run: sudo apt install clang-12
-
-    - name: Install clang 10
-      if: matrix.compiler == 'clang++-10'
-      run: sudo apt install clang-10 libc++-10-dev
+    - name: Install clang 18
+      if: matrix.compiler == 'clang++-18'
+      run: sudo apt install clang-18
 
     - uses: actions/checkout@v4
 
@@ -49,19 +45,10 @@ jobs:
       run: cmake -E make_directory ${{github.workspace}}/build/${{ matrix.build_type }}
 
     - name: Configure CMake
-      # Use a bash shell so we can use the same syntax for environment variable
-      # access regardless of the host operating system
       shell: bash
       working-directory: ${{github.workspace}}/build/${{ matrix.build_type }}
-      # Note the current convention is to use the -S and -B options here to specify source
-      # and build directories, but this is only available with CMake 3.13 and higher.
-      # The CMake binaries on the Github Actions machines are (as of this writing) 3.12
       run: |
-        if [ "$RUNNER_OS" == "Linux" ]; then
-          cmake $GITHUB_WORKSPACE -DCMAKE_CXX_COMPILER=${{ matrix.compiler }} -DCMAKE_BUILD_TYPE=${{ matrix.build_type }} -DTESTS=ON
-        else
-          cmake $GITHUB_WORKSPACE -DCMAKE_BUILD_TYPE=${{ matrix.build_type }} -DTESTS=ON
-        fi
+        cmake $GITHUB_WORKSPACE -DCMAKE_CXX_COMPILER=${{ matrix.compiler }} -DCMAKE_BUILD_TYPE=${{ matrix.build_type }} -DTESTS=ON
 
     - name: Build
       working-directory: ${{github.workspace}}/build/${{ matrix.build_type }}
