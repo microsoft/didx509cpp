@@ -1,12 +1,10 @@
 # Copyright (c) Microsoft Corporation.
 # Licensed under the MIT License.
+cmake_minimum_required(VERSION 3.16)
 
 project(didx509cpp LANGUAGES CXX C ASM)
 
-cmake_minimum_required(VERSION 3.11)
-set(CMAKE_CXX_STANDARD 14)
-
-set(DIDX509CPP_DIR ${CMAKE_CURRENT_SOURCE_DIR})
+set(CMAKE_CXX_STANDARD 20)
 
 option(PROFILE "enable profiling" OFF)
 option(TESTS "enable testing" ON)
