@@ -13,7 +13,7 @@ std::string pem_chain = ...;
 std::string did = "did:x509:0:sha256:WE4P5dd8DnLHSkyHaIjhp4udlkF9LqoKwCvu9gl38jk::eku:1.3.6.1.4.1.311.10.3.13";
 
 try {
-    std::string doc = resolve(pem_chain, did));
+    std::string doc = resolve(pem_chain, did);
 } catch (...)
 {...}
     
