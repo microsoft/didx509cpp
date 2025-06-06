@@ -25,8 +25,13 @@ static std::string load_certificate_chain(const std::string& path)
 
 void test_resolve_success(const std::string& chain, const std::string& did)
 {
+  std::string did_doc;
+  REQUIRE_NOTHROW(did_doc = resolve(chain, did, true));
+  // Verify that resolved DID document is valid JSON
+  REQUIRE_NOTHROW(auto _ = nlohmann::json::parse(did_doc));
+  
   std::string jwk;
-  REQUIRE_NOTHROW(jwk = resolve(chain, did, true));
+  REQUIRE_NOTHROW(jwk = resolve_jwk(chain, did, true));
   // Verify that resolved JWK is valid JSON
   REQUIRE_NOTHROW(auto _ = nlohmann::json::parse(jwk));
 }

@@ -1290,6 +1290,22 @@ namespace didx509
       }
     }
 
+    inline std::pair<bool, bool> is_agreed_signature_key(const UqX509& cert)
+    {
+      bool include_assertion_method =
+        !cert.has_key_usage() || cert.has_key_usage_digital_signature();
+      bool include_key_agreement =
+        !cert.has_key_usage() || cert.has_key_usage_key_agreement();
+      if (!include_assertion_method && !include_key_agreement)
+      {
+        throw std::runtime_error(
+          "certificate key usage must include digital signature or key "
+          "agreement");
+      }
+
+      return {include_assertion_method, include_key_agreement};
+    }
+
     inline std::string create_did_document(
       const std::string& did, const UqSTACK_OF_X509& chain)
     {
@@ -1307,14 +1323,7 @@ namespace didx509
 })";
 
       const auto& leaf = chain.front();
-      bool include_assertion_method =
-        !leaf.has_key_usage() || leaf.has_key_usage_digital_signature();
-      bool include_key_agreement =
-        !leaf.has_key_usage() || leaf.has_key_usage_key_agreement();
-      if (!include_assertion_method && !include_key_agreement)
-        throw std::runtime_error(
-          "leaf certificate key usage must include digital signature or key "
-          "agreement");
+      const auto& [include_assertion_method, include_key_agreement] = is_agreed_signature_key(leaf);
 
       std::string am, ka;
       if (include_assertion_method)
@@ -1333,7 +1342,7 @@ namespace didx509
     }
   }
 
-  inline std::string resolve(
+  inline UqSTACK_OF_X509 resolve_chain(
     const std::string& chain_pem,
     const std::string& did,
     bool ignore_time = false)
@@ -1349,10 +1358,30 @@ namespace didx509
     std::vector<UqX509> roots;
     roots.emplace_back(std::move(root));
 
-    const auto& valid_chain = chain.verify(roots, ignore_time);
-
+    auto valid_chain = chain.verify(roots, ignore_time);
     verify(valid_chain, did);
 
+    return valid_chain;
+  }
+
+  inline std::string resolve(
+    const std::string& chain_pem,
+    const std::string& did,
+    bool ignore_time = false)
+  {
+    const auto valid_chain = resolve_chain(chain_pem, did, ignore_time);
     return create_did_document(did, valid_chain);
+  }
+
+  inline std::string resolve_jwk(
+    const std::string& chain_pem,
+    const std::string& did,
+    bool ignore_time = false)
+  {
+    const auto valid_chain = resolve_chain(chain_pem, did, ignore_time);
+    const auto& leaf = valid_chain.front();
+    is_agreed_signature_key(leaf);
+
+    return leaf.public_jwk();
   }
 }
