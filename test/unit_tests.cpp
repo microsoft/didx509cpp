@@ -23,6 +23,30 @@ static std::string load_certificate_chain(const std::string& path)
   return ss.str();
 }
 
+static std::vector<std::string> split_x509_cert_bundle(
+  const std::string_view& pem)
+{
+  std::string separator("-----END CERTIFICATE-----");
+  std::vector<std::string> pems;
+  size_t separator_end = 0;
+  auto next_separator_start = pem.find(separator);
+  while (next_separator_start != std::string_view::npos)
+  {
+    // Trim whitespace between certificates
+    while (separator_end < next_separator_start &&
+            (std::isspace(pem[separator_end]) != 0))
+    {
+      ++separator_end;
+    }
+    pems.emplace_back(std::string(pem.substr(
+      separator_end,
+      (next_separator_start - separator_end) + separator.size())));
+    separator_end = next_separator_start + separator.size();
+    next_separator_start = pem.find(separator, separator_end);
+  }
+  return pems;
+}
+
 void test_resolve_success(const std::string& chain, const std::string& did)
 {
   std::string did_doc;
@@ -31,7 +55,8 @@ void test_resolve_success(const std::string& chain, const std::string& did)
   REQUIRE_NOTHROW(auto _ = nlohmann::json::parse(did_doc));
   
   std::string jwk;
-  REQUIRE_NOTHROW(jwk = resolve_jwk(chain, did, true));
+  const auto split_chain = split_x509_cert_bundle(chain);
+  REQUIRE_NOTHROW(jwk = resolve_jwk(split_chain, did, true));
   // Verify that resolved JWK is valid JSON
   REQUIRE_NOTHROW(auto _ = nlohmann::json::parse(jwk));
 }

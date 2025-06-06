@@ -903,6 +903,30 @@ namespace didx509
         sk_X509_INFO_pop_free(sk_info, X509_INFO_free);
       }
 
+      UqSTACK_OF_X509(const std::vector<std::string>& pem) :
+        UqSSLOBJECT(
+          NULL, [](auto x) { sk_X509_pop_free(x, X509_free); }, false)
+      {
+        p.reset(sk_X509_new_null());
+        for (const auto& pem_elem: pem)
+        {
+          UqBIO mem(pem_elem);
+          STACK_OF(X509_INFO)* sk_info =
+            PEM_X509_INFO_read_bio(mem, NULL, NULL, NULL);
+          if (!sk_info)
+            throw std::runtime_error("could not parse PEM element");
+          int sz = sk_X509_INFO_num(sk_info);
+          if (sz != 1)
+            throw std::runtime_error("expected exactly one PEM element");
+          auto sk_0 = sk_X509_INFO_value(sk_info, 0);
+          if (!sk_0->x509)
+            throw std::runtime_error("invalid PEM element");
+          X509_up_ref(sk_0->x509);
+          sk_X509_push(*this, sk_0->x509);
+          sk_X509_INFO_pop_free(sk_info, X509_INFO_free);
+        }
+      }
+
       UqSTACK_OF_X509& operator=(UqSTACK_OF_X509&& other)
       {
         p.reset(other.p.release());
@@ -1343,12 +1367,10 @@ namespace didx509
   }
 
   inline UqSTACK_OF_X509 resolve_chain(
-    const std::string& chain_pem,
+    UqSTACK_OF_X509& chain,
     const std::string& did,
     bool ignore_time = false)
   {
-    UqSTACK_OF_X509 chain(chain_pem);
-
     if (chain.empty())
       throw std::runtime_error("no certificate chain");
 
@@ -1369,16 +1391,20 @@ namespace didx509
     const std::string& did,
     bool ignore_time = false)
   {
-    const auto valid_chain = resolve_chain(chain_pem, did, ignore_time);
+    UqSTACK_OF_X509 chain(chain_pem);
+
+    const auto valid_chain = resolve_chain(chain, did, ignore_time);
     return create_did_document(did, valid_chain);
   }
 
   inline std::string resolve_jwk(
-    const std::string& chain_pem,
+    const std::vector<std::string>& chain_pem,
     const std::string& did,
     bool ignore_time = false)
   {
-    const auto valid_chain = resolve_chain(chain_pem, did, ignore_time);
+    UqSTACK_OF_X509 chain(chain_pem);
+
+    const auto valid_chain = resolve_chain(chain, did, ignore_time);
     const auto& leaf = valid_chain.front();
     is_agreed_signature_key(leaf);
 
