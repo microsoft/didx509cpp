@@ -87,20 +87,20 @@ jobs:
         run: tdnf -y install build-essential cmake openssl-devel curl-devel
 
       - name: Create Build Environment
-        run: cmake -E make_directory ${{github.workspace}}/build/${{ matrix.build_type }}
+        run: cmake -E make_directory build/${{ matrix.build_type }}
 
       - name: Configure CMake
         shell: bash
-        working-directory: ${{github.workspace}}/build/${{ matrix.build_type }}
+        working-directory: build/${{ matrix.build_type }}
         run: |
           cmake $GITHUB_WORKSPACE -DCMAKE_CXX_COMPILER=${{ matrix.compiler }} -DCMAKE_BUILD_TYPE=${{ matrix.build_type }} -DTESTS=ON
 
       - name: Build
-        working-directory: ${{github.workspace}}/build/${{ matrix.build_type }}
+        working-directory: build/${{ matrix.build_type }}
         shell: bash
         run: cmake --build . --config ${{ matrix.build_type }}
 
       - name: Test
-        working-directory: ${{github.workspace}}/build/${{ matrix.build_type }}
+        working-directory: build/${{ matrix.build_type }}
         shell: bash
         run: ctest -C ${{ matrix.build_type }} -VV
