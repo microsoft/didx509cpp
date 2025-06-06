@@ -1200,7 +1200,19 @@ namespace didx509
           std::unordered_set<std::string> seen_fields;
           for (size_t j = 0; j < args.size(); j += 2)
           {
-            const auto& k = args[j];
+            auto k = args[j];
+            if (k == "S")
+            {
+              // The correct key for state is ST, see
+              // https://www.rfc-editor.org/rfc/rfc4519#section-2.33
+              // and https://www.rfc-editor.org/rfc/rfc4514.html#section-3
+              // but the same text also says:
+              // > Implementations MAY recognize other DN string representations.
+              // and S is emitted instead by some issuers to mean State. DNs that
+              // contain both an S and a ST field are accordingly considered
+              // to contain a duplicate field, and rejected.
+              k = "ST";
+            }
             const auto& v = url_unescape(args[j + 1]);
 
             if (seen_fields.find(k) != seen_fields.end())
