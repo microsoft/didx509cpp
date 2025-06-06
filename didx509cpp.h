@@ -1208,7 +1208,7 @@ namespace didx509
               // and https://www.rfc-editor.org/rfc/rfc4514.html#section-3
               // but the same text also says:
               // > Implementations MAY recognize other DN string representations.
-              // and S is emitted instead by some issuers to mean State. DNs that
+              // and S is used instead by some issuers to mean State. DNs that
               // contain both an S and a ST field are accordingly considered
               // to contain a duplicate field, and rejected.
               k = "ST";
