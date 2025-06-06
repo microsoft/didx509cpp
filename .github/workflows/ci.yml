@@ -4,14 +4,14 @@ on:
   push:
     branches:
       - main
-      - 'releases/**'
+      - "releases/**"
     tags:
-      - 'didx509cpp-*'
-      - 'v*'
+      - "didx509cpp-*"
+      - "v*"
   pull_request:
 
 jobs:
-  build-test:
+  build-test-ubuntu:
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
@@ -26,36 +26,81 @@ jobs:
             compiler: clang++-15
 
     steps:
-    - name: Install packages
-      run: |
-        sudo apt update
-        sudo apt install libcurl4-openssl-dev libssl-dev
+      - name: Install packages
+        run: |
+          sudo apt update
+          sudo apt install libcurl4-openssl-dev libssl-dev
 
-    - name: Install clang 15
-      if: matrix.compiler == 'clang++-15'
-      run: sudo apt install clang-15
+      - name: Install clang 15
+        if: matrix.compiler == 'clang++-15'
+        run: sudo apt install clang-15
 
-    - name: Install clang 18
-      if: matrix.compiler == 'clang++-18'
-      run: sudo apt install clang-18
+      - name: Install clang 18
+        if: matrix.compiler == 'clang++-18'
+        run: sudo apt install clang-18
 
-    - uses: actions/checkout@v4
+      - uses: actions/checkout@v4
 
-    - name: Create Build Environment
-      run: cmake -E make_directory ${{github.workspace}}/build/${{ matrix.build_type }}
+      - name: Create Build Environment
+        run: cmake -E make_directory ${{github.workspace}}/build/${{ matrix.build_type }}
 
-    - name: Configure CMake
-      shell: bash
-      working-directory: ${{github.workspace}}/build/${{ matrix.build_type }}
-      run: |
-        cmake $GITHUB_WORKSPACE -DCMAKE_CXX_COMPILER=${{ matrix.compiler }} -DCMAKE_BUILD_TYPE=${{ matrix.build_type }} -DTESTS=ON
+      - name: Configure CMake
+        shell: bash
+        working-directory: ${{github.workspace}}/build/${{ matrix.build_type }}
+        run: |
+          cmake $GITHUB_WORKSPACE -DCMAKE_CXX_COMPILER=${{ matrix.compiler }} -DCMAKE_BUILD_TYPE=${{ matrix.build_type }} -DTESTS=ON
 
-    - name: Build
-      working-directory: ${{github.workspace}}/build/${{ matrix.build_type }}
-      shell: bash
-      run: cmake --build . --config ${{ matrix.build_type }}
+      - name: Build
+        working-directory: ${{github.workspace}}/build/${{ matrix.build_type }}
+        shell: bash
+        run: cmake --build . --config ${{ matrix.build_type }}
 
-    - name: Test
-      working-directory: ${{github.workspace}}/build/${{ matrix.build_type }}
-      shell: bash
-      run: ctest -C ${{ matrix.build_type }} -VV
+      - name: Test
+        working-directory: ${{github.workspace}}/build/${{ matrix.build_type }}
+        shell: bash
+        run: ctest -C ${{ matrix.build_type }} -VV
+
+  build-test-azure-linux:
+    runs-on: ubuntu-latest
+    container:
+      image: mcr.microsoft.com/azurelinux/base/core:3.0
+
+    strategy:
+      fail-fast: false
+      matrix:
+        build_type: [Debug, Release]
+        compiler: [g++]
+
+    steps:
+      - name: Checkout dependencies
+        shell: bash
+        run: |
+          set -ex
+          gpg --import /etc/pki/rpm-gpg/MICROSOFT-RPM-GPG-KEY
+          tdnf -y update
+          tdnf -y install ca-certificates git
+
+      - uses: actions/checkout@v4
+
+      - name: Build dependencies
+        shell: bash
+        run: tdnf -y install build-essential cmake openssl-devel curl-devel
+
+      - name: Create Build Environment
+        run: cmake -E make_directory ${{github.workspace}}/build/${{ matrix.build_type }}
+
+      - name: Configure CMake
+        shell: bash
+        working-directory: ${{github.workspace}}/build/${{ matrix.build_type }}
+        run: |
+          cmake $GITHUB_WORKSPACE -DCMAKE_CXX_COMPILER=${{ matrix.compiler }} -DCMAKE_BUILD_TYPE=${{ matrix.build_type }} -DTESTS=ON
+
+      - name: Build
+        working-directory: ${{github.workspace}}/build/${{ matrix.build_type }}
+        shell: bash
+        run: cmake --build . --config ${{ matrix.build_type }}
+
+      - name: Test
+        working-directory: ${{github.workspace}}/build/${{ matrix.build_type }}
+        shell: bash
+        run: ctest -C ${{ matrix.build_type }} -VV
