@@ -861,6 +861,36 @@ namespace didx509
       }
     };
 
+    struct UqSTACK_OF_X509_INFO
+      : public UqSSLOBJECT<STACK_OF(X509_INFO), nullptr, nullptr>
+    {
+      UqSTACK_OF_X509_INFO() :
+        UqSSLOBJECT(sk_X509_INFO_new_null(), [](auto x) {
+          sk_X509_INFO_pop_free(x, X509_INFO_free);
+        })
+      {}
+
+      UqSTACK_OF_X509_INFO(UqSTACK_OF_X509_INFO&& other) :
+        UqSSLOBJECT(other, [](auto x) { sk_X509_INFO_pop_free(x, X509_INFO_free); })
+      {
+        other.release();
+      }
+
+      UqSTACK_OF_X509_INFO(const UqBIO& bio) :
+        UqSSLOBJECT(
+          PEM_X509_INFO_read_bio(bio, NULL, NULL, NULL),
+          [](auto x) { sk_X509_INFO_pop_free(x, X509_INFO_free); })
+      {
+        if (!p)
+          throw std::runtime_error("could not parse PEM chain");
+      }
+
+      int size() const
+      {
+        return sk_X509_INFO_num(p.get());
+      }
+    };
+
     struct UqSTACK_OF_X509
       : public UqSSLOBJECT<STACK_OF(X509), nullptr, nullptr>
     {
@@ -886,13 +916,9 @@ namespace didx509
           NULL, [](auto x) { sk_X509_pop_free(x, X509_free); }, false)
       {
         UqBIO mem(pem);
-        STACK_OF(X509_INFO)* sk_info =
-          PEM_X509_INFO_read_bio(mem, NULL, NULL, NULL);
-        if (!sk_info)
-          throw std::runtime_error("could not parse PEM chain");
-        int sz = sk_X509_INFO_num(sk_info);
+        UqSTACK_OF_X509_INFO sk_info(mem);
         p.reset(sk_X509_new_null());
-        for (int i = 0; i < sz; i++)
+        for (int i = 0; i < sk_info.size(); i++)
         {
           auto sk_i = sk_X509_INFO_value(sk_info, i);
           if (!sk_i->x509)
@@ -900,7 +926,6 @@ namespace didx509
           X509_up_ref(sk_i->x509);
           sk_X509_push(*this, sk_i->x509);
         }
-        sk_X509_INFO_pop_free(sk_info, X509_INFO_free);
       }
 
       UqSTACK_OF_X509(const std::vector<std::string>& pem) :
@@ -911,19 +936,14 @@ namespace didx509
         for (const auto& pem_elem: pem)
         {
           UqBIO mem(pem_elem);
-          STACK_OF(X509_INFO)* sk_info =
-            PEM_X509_INFO_read_bio(mem, NULL, NULL, NULL);
-          if (!sk_info)
-            throw std::runtime_error("could not parse PEM element");
-          int sz = sk_X509_INFO_num(sk_info);
-          if (sz != 1)
+          UqSTACK_OF_X509_INFO sk_info(mem);
+          if (sk_info.size() != 1)
             throw std::runtime_error("expected exactly one PEM element");
           auto sk_0 = sk_X509_INFO_value(sk_info, 0);
           if (!sk_0->x509)
             throw std::runtime_error("invalid PEM element");
           X509_up_ref(sk_0->x509);
           sk_X509_push(*this, sk_0->x509);
-          sk_X509_INFO_pop_free(sk_info, X509_INFO_free);
         }
       }
 

@@ -69,6 +69,14 @@ void test_resolve_error(
   REQUIRE_THROWS_WITH(resolve(chain, did, true), doctest::Contains(error_msg));
 }
 
+void test_resolve_jwk_error(
+  const std::vector<std::string>& chain,
+  const std::string& did,
+  const doctest::String& error_msg)
+{
+  REQUIRE_THROWS_WITH(resolve_jwk(chain, did, true), doctest::Contains(error_msg));
+}
+
 TEST_CASE("Wrong prefix")
 {
   auto chain = load_certificate_chain("ms-code-signing.pem");
@@ -81,6 +89,29 @@ TEST_CASE("Empty chain")
   auto chain = "";
   auto did = "djd:y508:1:abcd::";
   test_resolve_error(chain, did, "no certificate chain");
+}
+
+TEST_CASE("Chain of one not-a-cert-but-a-chain")
+{
+  auto chain = load_certificate_chain("ms-code-signing.pem");
+  auto did =
+    "did:x509:0:sha256:hH32p4SXlD8n_HLrk_mmNzIKArVh0KkbCeh6eAftfGE"
+    "::subject:CN:Microsoft%20Corporation";
+  test_resolve_jwk_error({chain}, did, "expected exactly one PEM element");
+}
+
+TEST_CASE("Invalid input")
+{
+  auto did =
+    "did:x509:0:sha256:hH32p4SXlD8n_HLrk_mmNzIKArVh0KkbCeh6eAftfGE"
+    "::subject:CN:Microsoft%20Corporation";
+  test_resolve_jwk_error({"-----BEGIN CERTIFICATE-----"}, did, "bad end line");
+  auto chain = load_certificate_chain("ms-code-signing.pem");
+  auto split_chain = split_x509_cert_bundle(chain);
+  split_chain[0][42] += 5;
+  test_resolve_jwk_error(split_chain, did, "bad base64 decode");
+  split_chain[0][42] -= 10;
+  test_resolve_jwk_error(split_chain, did, "asn1 encoding routines::too long");
 }
 
 TEST_CASE("TestRootCA")
