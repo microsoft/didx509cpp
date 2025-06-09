@@ -999,7 +999,7 @@ namespace didx509
       UqSTACK_OF_X509 verify(
         const std::vector<UqX509>& roots,
         bool ignore_time = false,
-        bool no_auth_key_id_ok = true)
+        bool no_auth_key_id_ok = true) const
       {
         if (size() <= 1)
           throw std::runtime_error("certificate chain too short");
@@ -1367,7 +1367,7 @@ namespace didx509
   }
 
   inline UqSTACK_OF_X509 resolve_chain(
-    UqSTACK_OF_X509& chain,
+    const UqSTACK_OF_X509& chain,
     const std::string& did,
     bool ignore_time = false)
   {
