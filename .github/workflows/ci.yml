@@ -88,7 +88,7 @@ jobs:
 
       - name: Build dependencies
         shell: bash
-        run: tdnf -y install build-essential cmake openssl-devel curl-devel
+        run: tdnf -y install build-essential cmake openssl-devel curl-devel --exclude=aznfs
 
       - name: Create Build Environment
         run: cmake -E make_directory build/${{ matrix.build_type }}
