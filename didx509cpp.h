@@ -861,6 +861,36 @@ namespace didx509
       }
     };
 
+    struct UqSTACK_OF_X509_INFO
+      : public UqSSLOBJECT<STACK_OF(X509_INFO), nullptr, nullptr>
+    {
+      UqSTACK_OF_X509_INFO() :
+        UqSSLOBJECT(sk_X509_INFO_new_null(), [](auto x) {
+          sk_X509_INFO_pop_free(x, X509_INFO_free);
+        })
+      {}
+
+      UqSTACK_OF_X509_INFO(UqSTACK_OF_X509_INFO&& other) :
+        UqSSLOBJECT(other, [](auto x) { sk_X509_INFO_pop_free(x, X509_INFO_free); })
+      {
+        other.release();
+      }
+
+      UqSTACK_OF_X509_INFO(const UqBIO& bio) :
+        UqSSLOBJECT(
+          PEM_X509_INFO_read_bio(bio, NULL, NULL, NULL),
+          [](auto x) { sk_X509_INFO_pop_free(x, X509_INFO_free); })
+      {
+        if (!p)
+          throw std::runtime_error("could not parse PEM chain");
+      }
+
+      int size() const
+      {
+        return sk_X509_INFO_num(p.get());
+      }
+    };
+
     struct UqSTACK_OF_X509
       : public UqSSLOBJECT<STACK_OF(X509), nullptr, nullptr>
     {
@@ -886,13 +916,9 @@ namespace didx509
           NULL, [](auto x) { sk_X509_pop_free(x, X509_free); }, false)
       {
         UqBIO mem(pem);
-        STACK_OF(X509_INFO)* sk_info =
-          PEM_X509_INFO_read_bio(mem, NULL, NULL, NULL);
-        if (!sk_info)
-          throw std::runtime_error("could not parse PEM chain");
-        int sz = sk_X509_INFO_num(sk_info);
+        UqSTACK_OF_X509_INFO sk_info(mem);
         p.reset(sk_X509_new_null());
-        for (int i = 0; i < sz; i++)
+        for (int i = 0; i < sk_info.size(); i++)
         {
           auto sk_i = sk_X509_INFO_value(sk_info, i);
           if (!sk_i->x509)
@@ -900,7 +926,25 @@ namespace didx509
           X509_up_ref(sk_i->x509);
           sk_X509_push(*this, sk_i->x509);
         }
-        sk_X509_INFO_pop_free(sk_info, X509_INFO_free);
+      }
+
+      UqSTACK_OF_X509(const std::vector<std::string>& pem) :
+        UqSSLOBJECT(
+          NULL, [](auto x) { sk_X509_pop_free(x, X509_free); }, false)
+      {
+        p.reset(sk_X509_new_null());
+        for (const auto& pem_elem: pem)
+        {
+          UqBIO mem(pem_elem);
+          UqSTACK_OF_X509_INFO sk_info(mem);
+          if (sk_info.size() != 1)
+            throw std::runtime_error("expected exactly one PEM element");
+          auto sk_0 = sk_X509_INFO_value(sk_info, 0);
+          if (!sk_0->x509)
+            throw std::runtime_error("invalid PEM element");
+          X509_up_ref(sk_0->x509);
+          sk_X509_push(*this, sk_0->x509);
+        }
       }
 
       UqSTACK_OF_X509& operator=(UqSTACK_OF_X509&& other)
@@ -975,7 +1019,7 @@ namespace didx509
       UqSTACK_OF_X509 verify(
         const std::vector<UqX509>& roots,
         bool ignore_time = false,
-        bool no_auth_key_id_ok = true)
+        bool no_auth_key_id_ok = true) const
       {
         if (size() <= 1)
           throw std::runtime_error("certificate chain too short");
@@ -1290,6 +1334,22 @@ namespace didx509
       }
     }
 
+    inline std::pair<bool, bool> is_agreed_signature_key(const UqX509& cert)
+    {
+      bool include_assertion_method =
+        !cert.has_key_usage() || cert.has_key_usage_digital_signature();
+      bool include_key_agreement =
+        !cert.has_key_usage() || cert.has_key_usage_key_agreement();
+      if (!include_assertion_method && !include_key_agreement)
+      {
+        throw std::runtime_error(
+          "certificate key usage must include digital signature or key "
+          "agreement");
+      }
+
+      return {include_assertion_method, include_key_agreement};
+    }
+
     inline std::string create_did_document(
       const std::string& did, const UqSTACK_OF_X509& chain)
     {
@@ -1307,14 +1367,7 @@ namespace didx509
 })";
 
       const auto& leaf = chain.front();
-      bool include_assertion_method =
-        !leaf.has_key_usage() || leaf.has_key_usage_digital_signature();
-      bool include_key_agreement =
-        !leaf.has_key_usage() || leaf.has_key_usage_key_agreement();
-      if (!include_assertion_method && !include_key_agreement)
-        throw std::runtime_error(
-          "leaf certificate key usage must include digital signature or key "
-          "agreement");
+      const auto& [include_assertion_method, include_key_agreement] = is_agreed_signature_key(leaf);
 
       std::string am, ka;
       if (include_assertion_method)
@@ -1333,13 +1386,11 @@ namespace didx509
     }
   }
 
-  inline std::string resolve(
-    const std::string& chain_pem,
+  inline UqSTACK_OF_X509 resolve_chain(
+    const UqSTACK_OF_X509& chain,
     const std::string& did,
     bool ignore_time = false)
   {
-    UqSTACK_OF_X509 chain(chain_pem);
-
     if (chain.empty())
       throw std::runtime_error("no certificate chain");
 
@@ -1349,10 +1400,34 @@ namespace didx509
     std::vector<UqX509> roots;
     roots.emplace_back(std::move(root));
 
-    const auto& valid_chain = chain.verify(roots, ignore_time);
-
+    auto valid_chain = chain.verify(roots, ignore_time);
     verify(valid_chain, did);
 
+    return valid_chain;
+  }
+
+  inline std::string resolve(
+    const std::string& chain_pem,
+    const std::string& did,
+    bool ignore_time = false)
+  {
+    UqSTACK_OF_X509 chain(chain_pem);
+
+    const auto valid_chain = resolve_chain(chain, did, ignore_time);
     return create_did_document(did, valid_chain);
+  }
+
+  inline std::string resolve_jwk(
+    const std::vector<std::string>& chain_pem,
+    const std::string& did,
+    bool ignore_time = false)
+  {
+    UqSTACK_OF_X509 chain(chain_pem);
+
+    const auto valid_chain = resolve_chain(chain, did, ignore_time);
+    const auto& leaf = valid_chain.front();
+    is_agreed_signature_key(leaf);
+
+    return leaf.public_jwk();
   }
 }

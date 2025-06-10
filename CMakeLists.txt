@@ -34,9 +34,9 @@ if(TESTS)
 
     if(CMAKE_BUILD_TYPE STREQUAL "Debug" AND CMAKE_CXX_COMPILER_ID STREQUAL "Clang")
       target_compile_options(
-        ${NAME} PRIVATE -fsanitize=undefined,address -fno-omit-frame-pointer
+        ${NAME} PRIVATE -fsanitize=undefined,address,leak -fno-omit-frame-pointer
       )
-      target_link_options(${NAME} PRIVATE -fsanitize=undefined,address)
+      target_link_options(${NAME} PRIVATE -fsanitize=undefined,address,leak)
     endif()
 
     add_test(NAME ${NAME} COMMAND ${NAME} ${ARGN})
