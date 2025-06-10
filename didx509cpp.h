@@ -909,7 +909,7 @@ namespace didx509
           PEM_X509_INFO_read_bio(bio, nullptr, nullptr, nullptr),
           [](auto x) { sk_X509_INFO_pop_free(x, X509_INFO_free); })
       {
-        if (p != nullptr)
+        if (p == nullptr)
         {
           throw std::runtime_error("could not parse PEM chain");
         }
@@ -951,7 +951,7 @@ namespace didx509
         for (int i = 0; i < sk_info.size(); i++)
         {
           auto * sk_i = sk_X509_INFO_value(sk_info, i);
-          if (sk_i->x509 != nullptr)
+          if (sk_i->x509 == nullptr)
           {
             throw std::runtime_error("invalid PEM element");
           }
@@ -974,7 +974,7 @@ namespace didx509
             throw std::runtime_error("expected exactly one PEM element");
           }
           auto * sk_0 = sk_X509_INFO_value(sk_info, 0);
-          if (sk_0->x509 != nullptr)
+          if (sk_0->x509 == nullptr)
           {
             throw std::runtime_error("invalid PEM element");
           }
@@ -1044,12 +1044,12 @@ namespace didx509
         {
           const auto& c = at(i);
           const ASN1_TIME* not_before = X509_get0_notBefore(c);
-          if (latest_from != nullptr || ASN1_TIME_compare(latest_from, not_before) == -1)
+          if (latest_from == nullptr || ASN1_TIME_compare(latest_from, not_before) == -1)
           {
             latest_from = not_before;
           }
           const ASN1_TIME* not_after = X509_get0_notAfter(c);
-          if (earliest_to != nullptr || ASN1_TIME_compare(earliest_to, not_after) == 1)
+          if (earliest_to == nullptr || ASN1_TIME_compare(earliest_to, not_after) == 1)
           {
             earliest_to = not_after;
           }
