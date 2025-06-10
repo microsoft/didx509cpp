@@ -4,13 +4,13 @@
 #pragma once
 
 #include <cstring>
+#include <cstdint>
+#include <cstdlib>
 #include <initializer_list>
-#include <iostream>
 #include <memory>
 #include <openssl/asn1.h>
 #include <openssl/bio.h>
 #include <openssl/bn.h>
-#include <openssl/ec.h>
 #include <openssl/err.h>
 #include <openssl/evp.h>
 #include <openssl/objects.h>
@@ -20,10 +20,10 @@
 #include <openssl/x509_vfy.h>
 #include <openssl/x509v3.h>
 #include <regex>
-#include <sstream>
 #include <stdexcept>
 #include <string>
 #include <unordered_set>
+#include <utility>
 #include <vector>
 
 #if defined(OPENSSL_VERSION_MAJOR) && OPENSSL_VERSION_MAJOR >= 3
@@ -40,10 +40,11 @@ namespace didx509
       __attribute__((noinline))
 #endif
     {
-      if (ec)
-        return std::string(ERR_error_string((unsigned long)ec, NULL));
-      else
-        return "unknown error";
+      if (ec != 0)
+      {
+        return {ERR_error_string((unsigned long)ec, nullptr)};
+      }
+      return "unknown error";
     }
 
     /// Throws if rc is different from and there is an error
@@ -52,10 +53,12 @@ namespace didx509
       __attribute__((noinline))
 #endif
     {
-      unsigned long ec = ERR_get_error();
+      const unsigned long ec = ERR_get_error();
       if (rc != 1 && ec != 0)
+      {
         throw std::runtime_error(
           std::string("OpenSSL error: ") + error_string(ec));
+      }
     }
 
     /// Throws if rc is 0 and there is an error
@@ -64,21 +67,23 @@ namespace didx509
       __attribute__((noinline))
 #endif
     {
-      unsigned long ec = ERR_get_error();
+      const unsigned long ec = ERR_get_error();
       if (rc == 0 && ec != 0)
+      {
         throw std::runtime_error(
           std::string("OpenSSL error: ") + error_string(ec));
+      }
     }
 
-    /// Throws if ptr is null
+    /// Throws if ptr is nullptr
     inline void CHECKNULL(void* ptr)
 #ifdef _DEBUG
       __attribute__((noinline))
 #endif
     {
-      if (ptr == NULL)
+      if (ptr == nullptr)
       {
-        unsigned long ec = ERR_get_error();
+        const unsigned long ec = ERR_get_error();
         throw std::runtime_error(
           std::string("OpenSSL error: missing object: ") + error_string(ec));
       }
@@ -223,7 +228,7 @@ namespace didx509
       {}
 
       UqASN1_OBJECT(UqASN1_OBJECT&& other) :
-        UqSSLOBJECT(NULL, ASN1_OBJECT_free, false)
+        UqSSLOBJECT(nullptr, ASN1_OBJECT_free, false)
       {
         p.reset(other.p.release());
       }
@@ -249,7 +254,7 @@ namespace didx509
       {}
 
       UqASN1_OCTET_STRING(UqASN1_OCTET_STRING&& other) :
-        UqSSLOBJECT(NULL, ASN1_OCTET_STRING_free, false)
+        UqSSLOBJECT(nullptr, ASN1_OCTET_STRING_free, false)
       {
         p.reset(other.p.release());
       }
@@ -298,7 +303,7 @@ namespace didx509
       {}
 
       UqGENERAL_NAME(UqGENERAL_NAME&& other) :
-        UqSSLOBJECT(NULL, GENERAL_NAME_free, false)
+        UqSSLOBJECT(nullptr, GENERAL_NAME_free, false)
       {
         p.reset(other.p.release());
       }
@@ -315,7 +320,7 @@ namespace didx509
 
       UqSUBJECT_ALT_NAME(const UqX509_EXTENSION& ext) :
         UqSSLOBJECT(
-          NULL,
+          nullptr,
           [](auto x) { sk_GENERAL_NAME_pop_free(x, GENERAL_NAME_free); },
           false)
       {
@@ -331,7 +336,7 @@ namespace didx509
 
       UqSUBJECT_ALT_NAME(UqSUBJECT_ALT_NAME&& other) :
         UqSSLOBJECT(
-          NULL, [](auto x) { sk_GENERAL_NAME_pop_free(x, GENERAL_NAME_free); })
+          nullptr, [](auto x) { sk_GENERAL_NAME_pop_free(x, GENERAL_NAME_free); })
       {
         p.reset(other.p.release());
       }
@@ -359,7 +364,7 @@ namespace didx509
       {}
 
       UqEXTENDED_KEY_USAGE(const UqX509_EXTENSION& ext) :
-        UqSSLOBJECT(NULL, EXTENDED_KEY_USAGE_free, false)
+        UqSSLOBJECT(nullptr, EXTENDED_KEY_USAGE_free, false)
       {
         UqASN1_OBJECT ext_obj = UqASN1_OBJECT(X509_EXTENSION_get_object(ext));
         UqASN1_OBJECT ext_key_obj(NID_ext_key_usage);
@@ -372,7 +377,7 @@ namespace didx509
       }
 
       UqEXTENDED_KEY_USAGE(UqEXTENDED_KEY_USAGE&& other) :
-        UqSSLOBJECT(NULL, EXTENDED_KEY_USAGE_free, false)
+        UqSSLOBJECT(nullptr, EXTENDED_KEY_USAGE_free, false)
       {
         p.reset(other.p.release());
       }
@@ -426,7 +431,7 @@ namespace didx509
 #if defined(OPENSSL_VERSION_MAJOR) && OPENSSL_VERSION_MAJOR >= 3
       UqBIGNUM get_bn_param(const char* key_name) const
       {
-        BIGNUM* bn = NULL;
+        BIGNUM* bn = nullptr;
         CHECK1(EVP_PKEY_get_bn_param(*this, key_name, &bn));
         UqBIGNUM r(bn);
         BN_free(bn);
@@ -438,7 +443,7 @@ namespace didx509
     struct UqEVP_PKEY_CTX : public UqSSLOBJECT<EVP_PKEY_CTX, nullptr, nullptr>
     {
       UqEVP_PKEY_CTX(int nid) :
-        UqSSLOBJECT(EVP_PKEY_CTX_new_id(nid, NULL), EVP_PKEY_CTX_free)
+        UqSSLOBJECT(EVP_PKEY_CTX_new_id(nid, nullptr), EVP_PKEY_CTX_free)
       {}
     };
 
@@ -446,12 +451,12 @@ namespace didx509
     {
       UqX509(const std::string& pem, bool check_null = true) :
         UqSSLOBJECT(
-          PEM_read_bio_X509(UqBIO(pem), NULL, NULL, NULL),
+          PEM_read_bio_X509(UqBIO(pem), nullptr, nullptr, nullptr),
           X509_free,
           check_null)
       {}
 
-      UqX509(UqX509&& other) : UqSSLOBJECT(NULL, X509_free, false)
+      UqX509(UqX509&& other) : UqSSLOBJECT(nullptr, X509_free, false)
       {
         X509* ptr = other;
         other.release();
@@ -570,7 +575,7 @@ namespace didx509
             key = snit->second;
           else
           {
-            int sz = OBJ_obj2txt(NULL, 0, oid, 1);
+            int sz = OBJ_obj2txt(nullptr, 0, oid, 1);
             key.resize(sz + 1, 0);
             OBJ_obj2txt((char*)key.data(), key.size(), oid, 1);
           }
@@ -589,7 +594,7 @@ namespace didx509
 
       bool has_subject_key_id() const
       {
-        return X509_get0_subject_key_id(*this) != NULL;
+        return X509_get0_subject_key_id(*this) != nullptr;
       }
 
       std::string subject_key_id() const
@@ -598,7 +603,7 @@ namespace didx509
         if (!key_id)
           throw std::runtime_error(
             "certificate does not contain a subject key id");
-        char* c = i2s_ASN1_OCTET_STRING(NULL, key_id);
+        char* c = i2s_ASN1_OCTET_STRING(nullptr, key_id);
         std::string r = c;
         free(c);
         return r;
@@ -606,7 +611,7 @@ namespace didx509
 
       bool has_authority_key_id() const
       {
-        return X509_get0_authority_key_id(*this) != NULL;
+        return X509_get0_authority_key_id(*this) != nullptr;
       }
 
       std::string authority_key_id() const
@@ -615,7 +620,7 @@ namespace didx509
         if (!key_id)
           throw std::runtime_error(
             "certificate does not contain an authority key id");
-        char* c = i2s_ASN1_OCTET_STRING(NULL, key_id);
+        char* c = i2s_ASN1_OCTET_STRING(nullptr, key_id);
         std::string r = c;
         free(c);
         return r;
@@ -625,7 +630,7 @@ namespace didx509
       {
         if (san_type == "dns")
         {
-          if (X509_check_host(*this, value.c_str(), value.size(), 0, NULL) == 1)
+          if (X509_check_host(*this, value.c_str(), value.size(), 0, nullptr) == 1)
             return true;
         }
         else if (san_type == "email")
@@ -697,7 +702,7 @@ namespace didx509
             auto e = pk.get_bn_param(OSSL_PKEY_PARAM_RSA_E);
 #else
             auto rsa = EVP_PKEY_get0_RSA(pk);
-            const BIGNUM *n = NULL, *e = NULL, *d = NULL;
+            const BIGNUM *n = nullptr, *e = nullptr, *d = nullptr;
             RSA_get0_key(rsa, &n, &e, &d);
 #endif
             auto n_len = BN_num_bytes(n);
@@ -713,11 +718,11 @@ namespace didx509
             r += "\"kty\":\"EC\",";
             r += "\"crv\":\"";
 #if defined(OPENSSL_VERSION_MAJOR) && OPENSSL_VERSION_MAJOR >= 3
-            BIGNUM *x = NULL, *y = NULL;
+            BIGNUM *x = nullptr, *y = nullptr;
             EVP_PKEY_get_bn_param(pk, OSSL_PKEY_PARAM_EC_PUB_X, &x);
             EVP_PKEY_get_bn_param(pk, OSSL_PKEY_PARAM_EC_PUB_Y, &y);
             size_t gname_len = 0;
-            CHECK1(EVP_PKEY_get_group_name(pk, NULL, 0, &gname_len));
+            CHECK1(EVP_PKEY_get_group_name(pk, nullptr, 0, &gname_len));
             std::string gname(gname_len + 1, 0);
             CHECK1(EVP_PKEY_get_group_name(
               pk, (char*)gname.data(), gname.size(), &gname_len));
@@ -736,7 +741,7 @@ namespace didx509
             int curve_nid = EC_GROUP_get_curve_name(grp);
             const EC_POINT* pnt = EC_KEY_get0_public_key(ec_key);
             BIGNUM *x = BN_new(), *y = BN_new();
-            CHECK1(EC_POINT_get_affine_coordinates(grp, pnt, x, y, NULL));
+            CHECK1(EC_POINT_get_affine_coordinates(grp, pnt, x, y, nullptr));
             if (curve_nid == NID_X9_62_prime256v1)
               r += "P-256";
             else if (curve_nid == NID_secp384r1)
@@ -816,7 +821,7 @@ namespace didx509
       void init(const EVP_MD* md)
       {
         md_size = EVP_MD_size(md);
-        CHECK1(EVP_DigestInit_ex(p.get(), md, NULL));
+        CHECK1(EVP_DigestInit_ex(p.get(), md, nullptr));
       }
 
       void update(const std::vector<uint8_t>& message)
@@ -878,7 +883,7 @@ namespace didx509
 
       UqSTACK_OF_X509_INFO(const UqBIO& bio) :
         UqSSLOBJECT(
-          PEM_X509_INFO_read_bio(bio, NULL, NULL, NULL),
+          PEM_X509_INFO_read_bio(bio, nullptr, nullptr, nullptr),
           [](auto x) { sk_X509_INFO_pop_free(x, X509_INFO_free); })
       {
         if (!p)
@@ -913,7 +918,7 @@ namespace didx509
 
       UqSTACK_OF_X509(const std::string& pem) :
         UqSSLOBJECT(
-          NULL, [](auto x) { sk_X509_pop_free(x, X509_free); }, false)
+          nullptr, [](auto x) { sk_X509_pop_free(x, X509_free); }, false)
       {
         UqBIO mem(pem);
         UqSTACK_OF_X509_INFO sk_info(mem);
@@ -930,7 +935,7 @@ namespace didx509
 
       UqSTACK_OF_X509(const std::vector<std::string>& pem) :
         UqSSLOBJECT(
-          NULL, [](auto x) { sk_X509_pop_free(x, X509_free); }, false)
+          nullptr, [](auto x) { sk_X509_pop_free(x, X509_free); }, false)
       {
         p.reset(sk_X509_new_null());
         for (const auto& pem_elem: pem)
@@ -1077,7 +1082,7 @@ namespace didx509
         }
         else
         {
-          auto msg = std::string(ERR_error_string(ERR_get_error(), NULL));
+          auto msg = std::string(ERR_error_string(ERR_get_error(), nullptr));
           throw std::runtime_error(std::string("OpenSSL error: ") + msg);
         }
       }
@@ -1177,7 +1182,9 @@ namespace didx509
       std::vector<std::string> r;
       r.reserve(urls.size());
       for (const auto& url : urls)
+      {
         r.push_back(url_unescape(url));
+      }
       return r;
     }
 
@@ -1289,7 +1296,9 @@ namespace didx509
         else if (policy_name == "san")
         {
           if (args.size() != 2)
+          {
             throw std::runtime_error("exactly one SAN type and value required");
+          }
 
           auto san_type = args[0];
           auto san_value = url_unescape(args[1]);
@@ -1301,7 +1310,9 @@ namespace didx509
         else if (policy_name == "eku")
         {
           if (args.size() != 1)
+          {
             throw std::runtime_error("exactly one EKU required");
+          }
 
           UqASN1_OBJECT oid(args[0]);
 
@@ -1315,12 +1326,16 @@ namespace didx509
                 found_eku = true;
           }
           if (!found_eku)
+          {
             throw std::runtime_error(std::string("EKU not found: ") + args[0]);
+          }
         }
         else if (policy_name == "fulcio-issuer")
         {
           if (args.size() != 1)
+          {
             throw std::runtime_error("excessive arguments to fulcio-issuer");
+          }
 
           const std::string fulcio_oid("1.3.6.1.4.1.57264.1.1");
           auto decoded_arg = url_unescape(args[0]);
@@ -1337,20 +1352,24 @@ namespace didx509
             }
           }
           if (!found)
+          {
             throw std::runtime_error(
               std::string("invalid fulcio-issuer: ") + fulcio_issuer);
+          }
         }
         else
+        {
           throw std::runtime_error(
             std::string("unsupported did:x509 scheme '") + policy_name + "'");
+        }
       }
     }
 
     inline std::pair<bool, bool> is_agreed_signature_key(const UqX509& cert)
     {
-      bool include_assertion_method =
+      const bool include_assertion_method =
         !cert.has_key_usage() || cert.has_key_usage_digital_signature();
-      bool include_key_agreement =
+      const bool include_key_agreement =
         !cert.has_key_usage() || cert.has_key_usage_key_agreement();
       if (!include_assertion_method && !include_key_agreement)
       {
@@ -1365,7 +1384,7 @@ namespace didx509
     inline std::string create_did_document(
       const std::string& did, const UqSTACK_OF_X509& chain)
     {
-      std::string format = R"({
+      const std::string format = R"({
     "@context": "https://www.w3.org/ns/did/v1",
     "id": "_DID_",
     "verificationMethod": [{
@@ -1381,11 +1400,16 @@ namespace didx509
       const auto& leaf = chain.front();
       const auto& [include_assertion_method, include_key_agreement] = is_agreed_signature_key(leaf);
 
-      std::string am, ka;
+      std::string am;
+      std::string ka;
       if (include_assertion_method)
-        am = ",\"assertionMethod\": \"" + did + "#key-1\"";
+      {
+        am = R"(,"assertionMethod": ")" + did + R"(#key-1")";
+      }
       if (include_key_agreement)
-        ka = ",\"keyAgreement\": \"" + did + "#key-1\"";
+      {
+        ka = R"(,"keyAgreement": ")" + did + R"(#key-1")";
+      }
 
       const auto& leaf_jwk = leaf.public_jwk();
 
@@ -1404,7 +1428,9 @@ namespace didx509
     bool ignore_time = false)
   {
     if (chain.empty())
+    {
       throw std::runtime_error("no certificate chain");
+    }
 
     // The last certificate in the chain is assumed to be the trusted root.
     UqX509 root = chain.back();
@@ -1423,7 +1449,7 @@ namespace didx509
     const std::string& did,
     bool ignore_time = false)
   {
-    UqSTACK_OF_X509 chain(chain_pem);
+    const UqSTACK_OF_X509 chain(chain_pem);
 
     const auto valid_chain = resolve_chain(chain, did, ignore_time);
     return create_did_document(did, valid_chain);
@@ -1434,7 +1460,7 @@ namespace didx509
     const std::string& did,
     bool ignore_time = false)
   {
-    UqSTACK_OF_X509 chain(chain_pem);
+    const UqSTACK_OF_X509 chain(chain_pem);
 
     const auto valid_chain = resolve_chain(chain, did, ignore_time);
     const auto& leaf = valid_chain.front();
