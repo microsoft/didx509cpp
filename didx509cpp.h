@@ -3,9 +3,11 @@
 
 #pragma once
 
+#include <climits>
 #include <cstring>
 #include <cstdint>
 #include <cstdlib>
+#include <ctime>
 #include <initializer_list>
 #include <memory>
 #include <openssl/asn1.h>
@@ -13,9 +15,11 @@
 #include <openssl/bn.h>
 #include <openssl/err.h>
 #include <openssl/evp.h>
+#include <openssl/obj_mac.h>
 #include <openssl/objects.h>
 #include <openssl/ossl_typ.h>
 #include <openssl/pem.h>
+#include <openssl/safestack.h>
 #include <openssl/x509.h>
 #include <openssl/x509_vfy.h>
 #include <openssl/x509v3.h>
@@ -35,14 +39,14 @@ namespace didx509
 {
   namespace
   {
-    inline std::string error_string(int ec)
+    inline std::string error_string(unsigned long ec)
 #ifdef _DEBUG
       __attribute__((noinline))
 #endif
     {
       if (ec != 0)
       {
-        return {ERR_error_string((unsigned long)ec, nullptr)};
+        return {ERR_error_string(ec, nullptr)};
       }
       return "unknown error";
     }
@@ -91,25 +95,35 @@ namespace didx509
 
     inline std::string to_base64(const std::vector<uint8_t>& bytes)
     {
-      int r_sz = 4 * ((bytes.size() + 2) / 3);
+      const int r_sz = 4 * ((bytes.size() + 2) / 3);
       std::string r(r_sz, 0);
       auto out_sz =
         EVP_EncodeBlock((unsigned char*)r.data(), bytes.data(), bytes.size());
       if (r_sz != out_sz)
+      {
         throw std::runtime_error("base64 conversion failed");
+      }
       while (r.back() == '=')
+      {
         r.pop_back();
+      }
       return r;
     }
 
     inline std::string to_base64url(const std::vector<uint8_t>& bytes)
     {
       auto r = to_base64(bytes);
-      for (size_t i = 0; i < r.size(); i++)
-        if (r[i] == '+')
-          r[i] = '-';
-        else if (r[i] == '/')
-          r[i] = '_';
+      for (char & i: r)
+      {
+        if (i == '+')
+        {
+          i = '-';
+        }
+        else if (i == '/')
+        {
+          i = '_';
+        }
+      }
       return r;
     }
 
@@ -129,7 +143,9 @@ namespace didx509
         p(ptr, dtor)
       {
         if (check_null)
+        {
           CHECKNULL(p.get());
+        }
       }
 
       UqSSLOBJECT(const UqSSLOBJECT&) = delete;
@@ -165,9 +181,9 @@ namespace didx509
     {
       UqBIGNUM(const BIGNUM* n) : UqSSLOBJECT(BN_dup(n), BN_free) {}
 
-      UqBIGNUM(UqBIGNUM&& other) : UqSSLOBJECT(nullptr, BN_free, false)
+      UqBIGNUM(UqBIGNUM&& other) noexcept : UqSSLOBJECT(nullptr, BN_free, false)
       {
-        p.reset(other.p.release());
+        p = std::move(other.p);
       }
     };
 
@@ -197,18 +213,18 @@ namespace didx509
         next.release();
       }
 
-      std::string to_string() const
+      [[nodiscard]] std::string to_string() const
       {
-        BUF_MEM* bptr;
+        BUF_MEM* bptr = nullptr;
         BIO_get_mem_ptr(p.get(), &bptr);
-        return std::string(bptr->data, bptr->length);
+        return {bptr->data, bptr->length};
       }
 
-      std::vector<uint8_t> to_vector() const
+      [[nodiscard]] std::vector<uint8_t> to_vector() const
       {
-        BUF_MEM* bptr;
+        BUF_MEM* bptr = nullptr;
         BIO_get_mem_ptr(p.get(), &bptr);
-        return std::vector<uint8_t>(bptr->data, bptr->data + bptr->length);
+        return {bptr->data, bptr->data + bptr->length};
       }
     };
 
@@ -227,10 +243,10 @@ namespace didx509
         UqSSLOBJECT(OBJ_nid2obj(nid), ASN1_OBJECT_free, true)
       {}
 
-      UqASN1_OBJECT(UqASN1_OBJECT&& other) :
+      UqASN1_OBJECT(UqASN1_OBJECT&& other) noexcept :
         UqSSLOBJECT(nullptr, ASN1_OBJECT_free, false)
       {
-        p.reset(other.p.release());
+        p = std::move(other.p);
       }
 
       bool operator==(const UqASN1_OBJECT& other) const
@@ -253,10 +269,10 @@ namespace didx509
         UqSSLOBJECT(ASN1_OCTET_STRING_dup(str), ASN1_OCTET_STRING_free)
       {}
 
-      UqASN1_OCTET_STRING(UqASN1_OCTET_STRING&& other) :
+      UqASN1_OCTET_STRING(UqASN1_OCTET_STRING&& other) noexcept :
         UqSSLOBJECT(nullptr, ASN1_OCTET_STRING_free, false)
       {
-        p.reset(other.p.release());
+        p = std::move(other.p);
       }
 
       operator std::string() const
@@ -280,16 +296,16 @@ namespace didx509
         UqSSLOBJECT(X509_EXTENSION_dup(ext), X509_EXTENSION_free, true)
       {}
 
-      UqX509_EXTENSION(UqX509_EXTENSION&& ext) :
+      UqX509_EXTENSION(UqX509_EXTENSION&& ext) noexcept :
         UqSSLOBJECT(ext, X509_EXTENSION_free, true)
       {}
 
-      UqASN1_OBJECT object() const
+      [[nodiscard]] UqASN1_OBJECT object() const
       {
         return X509_EXTENSION_get_object(*this);
       }
 
-      UqASN1_OCTET_STRING data() const
+      [[nodiscard]] UqASN1_OCTET_STRING data() const
       {
         return X509_EXTENSION_get_data(*this);
       }
@@ -302,10 +318,10 @@ namespace didx509
         UqSSLOBJECT(GENERAL_NAME_dup(n), GENERAL_NAME_free)
       {}
 
-      UqGENERAL_NAME(UqGENERAL_NAME&& other) :
+      UqGENERAL_NAME(UqGENERAL_NAME&& other) noexcept :
         UqSSLOBJECT(nullptr, GENERAL_NAME_free, false)
       {
-        p.reset(other.p.release());
+        p = std::move(other.p);
       }
     };
 
@@ -324,13 +340,17 @@ namespace didx509
           [](auto x) { sk_GENERAL_NAME_pop_free(x, GENERAL_NAME_free); },
           false)
       {
-        UqASN1_OBJECT ext_obj(X509_EXTENSION_get_object(ext));
-        UqASN1_OBJECT ext_key_obj(NID_subject_alt_name);
+        const UqASN1_OBJECT ext_obj(X509_EXTENSION_get_object(ext));
+        const UqASN1_OBJECT ext_key_obj(NID_subject_alt_name);
         if (ext_obj != ext_key_obj)
+        {
           throw std::runtime_error("invalid extension type");
+        }
         auto data = static_cast<STACK_OF(GENERAL_NAME)*>(X509V3_EXT_d2i(ext));
         if (!data)
+        {
           throw std::runtime_error("SAN extension could not be decoded");
+        }
         p.reset(data);
       }
 
@@ -751,14 +771,15 @@ namespace didx509
             else
               throw std::runtime_error("unsupported EC key curve");
 #endif
-            r += "\",";
+            r += R"(",)";
             auto x_len = BN_num_bytes(x);
             auto y_len = BN_num_bytes(y);
-            std::vector<uint8_t> xv(x_len), yv(y_len);
+            std::vector<uint8_t> xv(x_len);
+            std::vector<uint8_t> yv(y_len);
             BN_bn2bin(x, xv.data());
             BN_bn2bin(y, yv.data());
-            r += "\"x\":\"" + to_base64url(xv) + "\",";
-            r += "\"y\":\"" + to_base64url(yv) + "\"";
+            r += R"("x":")" + to_base64url(xv) + R"(",)";
+            r += R"("y":")" + to_base64url(yv) + R"(")";
             BN_free(x);
             BN_free(y);
             break;
@@ -807,9 +828,11 @@ namespace didx509
       {
         UqX509_NAME_ENTRY entry(subject_name, cn_i);
         ASN1_STRING* entry_string = X509_NAME_ENTRY_get_data(entry);
-        std::string common_name = (char*)ASN1_STRING_get0_data(entry_string);
+        const std::string common_name = (char*)ASN1_STRING_get0_data(entry_string);
         if (common_name == expected_name)
+        {
           return true;
+        }
         cn_i = X509_NAME_get_index_by_NID(subject_name, NID_commonName, cn_i);
       }
       return false;
@@ -838,7 +861,7 @@ namespace didx509
       }
 
     protected:
-      size_t md_size;
+      size_t md_size = 0;
     };
 
     struct UqX509_STORE_CTX : public UqSSLOBJECT<
@@ -875,7 +898,7 @@ namespace didx509
         })
       {}
 
-      UqSTACK_OF_X509_INFO(UqSTACK_OF_X509_INFO&& other) :
+      UqSTACK_OF_X509_INFO(UqSTACK_OF_X509_INFO&& other) noexcept :
         UqSSLOBJECT(other, [](auto x) { sk_X509_INFO_pop_free(x, X509_INFO_free); })
       {
         other.release();
@@ -886,11 +909,13 @@ namespace didx509
           PEM_X509_INFO_read_bio(bio, nullptr, nullptr, nullptr),
           [](auto x) { sk_X509_INFO_pop_free(x, X509_INFO_free); })
       {
-        if (!p)
+        if (p != nullptr)
+        {
           throw std::runtime_error("could not parse PEM chain");
+        }
       }
 
-      int size() const
+      [[nodiscard]] int size() const
       {
         return sk_X509_INFO_num(p.get());
       }
@@ -910,7 +935,7 @@ namespace didx509
         })
       {}
 
-      UqSTACK_OF_X509(UqSTACK_OF_X509&& other) :
+      UqSTACK_OF_X509(UqSTACK_OF_X509&& other) noexcept :
         UqSSLOBJECT(other, [](auto x) { sk_X509_pop_free(x, X509_free); })
       {
         other.release();
@@ -920,14 +945,16 @@ namespace didx509
         UqSSLOBJECT(
           nullptr, [](auto x) { sk_X509_pop_free(x, X509_free); }, false)
       {
-        UqBIO mem(pem);
+        const UqBIO mem(pem);
         UqSTACK_OF_X509_INFO sk_info(mem);
         p.reset(sk_X509_new_null());
         for (int i = 0; i < sk_info.size(); i++)
         {
-          auto sk_i = sk_X509_INFO_value(sk_info, i);
-          if (!sk_i->x509)
+          auto * sk_i = sk_X509_INFO_value(sk_info, i);
+          if (sk_i->x509 != nullptr)
+          {
             throw std::runtime_error("invalid PEM element");
+          }
           X509_up_ref(sk_i->x509);
           sk_X509_push(*this, sk_i->x509);
         }
@@ -940,39 +967,45 @@ namespace didx509
         p.reset(sk_X509_new_null());
         for (const auto& pem_elem: pem)
         {
-          UqBIO mem(pem_elem);
+          const UqBIO mem(pem_elem);
           UqSTACK_OF_X509_INFO sk_info(mem);
           if (sk_info.size() != 1)
+          {
             throw std::runtime_error("expected exactly one PEM element");
-          auto sk_0 = sk_X509_INFO_value(sk_info, 0);
-          if (!sk_0->x509)
+          }
+          auto * sk_0 = sk_X509_INFO_value(sk_info, 0);
+          if (sk_0->x509 != nullptr)
+          {
             throw std::runtime_error("invalid PEM element");
+          }
           X509_up_ref(sk_0->x509);
           sk_X509_push(*this, sk_0->x509);
         }
       }
 
-      UqSTACK_OF_X509& operator=(UqSTACK_OF_X509&& other)
+      UqSTACK_OF_X509& operator=(UqSTACK_OF_X509&& other) noexcept
       {
-        p.reset(other.p.release());
+        p = std::move(other.p);
         return *this;
       }
 
-      size_t size() const
+      [[nodiscard]] size_t size() const
       {
-        int r = sk_X509_num(p.get());
+        const int r = sk_X509_num(p.get());
         return r == (-1) ? 0 : r;
       }
 
-      bool empty() const
+      [[nodiscard]] bool empty() const
       {
         return size() == 0;
       }
 
-      UqX509 at(size_t i) const
+      [[nodiscard]] UqX509 at(size_t i) const
       {
         if (i >= size())
+        {
           throw std::out_of_range("index into certificate stack too large");
+        }
         return sk_X509_value(p.get(), i);
       }
 
@@ -987,32 +1020,39 @@ namespace didx509
         sk_X509_push(p.get(), x509.release());
       }
 
-      UqX509 front() const
+      [[nodiscard]] UqX509 front() const
       {
         return (*this).at(0);
       }
 
-      UqX509 back() const
+      [[nodiscard]] UqX509 back() const
       {
         return (*this).at(size() - 1);
       }
 
-      std::pair<struct tm, struct tm> get_validity_range()
+      [[nodiscard]] std::pair<struct tm, struct tm> get_validity_range() const
       {
         if (size() == 0)
+        {
           throw std::runtime_error(
             "no certificate change to compute validity ranges for");
+        }
 
-        const ASN1_TIME *latest_from = nullptr, *earliest_to = nullptr;
+        const ASN1_TIME *latest_from = nullptr;
+        const ASN1_TIME *earliest_to = nullptr;
         for (size_t i = 0; i < size(); i++)
         {
           const auto& c = at(i);
           const ASN1_TIME* not_before = X509_get0_notBefore(c);
-          if (!latest_from || ASN1_TIME_compare(latest_from, not_before) == -1)
+          if (latest_from != nullptr || ASN1_TIME_compare(latest_from, not_before) == -1)
+          {
             latest_from = not_before;
+          }
           const ASN1_TIME* not_after = X509_get0_notAfter(c);
-          if (!earliest_to || ASN1_TIME_compare(earliest_to, not_after) == 1)
+          if (earliest_to != nullptr || ASN1_TIME_compare(earliest_to, not_after) == 1)
+          {
             earliest_to = not_after;
+          }
         }
 
         std::pair<struct tm, struct tm> r;
@@ -1021,18 +1061,22 @@ namespace didx509
         return r;
       }
 
-      UqSTACK_OF_X509 verify(
+      [[nodiscard]] UqSTACK_OF_X509 verify(
         const std::vector<UqX509>& roots,
         bool ignore_time = false,
         bool no_auth_key_id_ok = true) const
       {
         if (size() <= 1)
+        {
           throw std::runtime_error("certificate chain too short");
+        }
 
         UqX509_STORE store;
 
         for (const auto& c : roots)
+        {
           CHECK1(X509_STORE_add_cert(store, back()));
+        }
 
         auto target = at(0);
 
@@ -1049,7 +1093,9 @@ namespace didx509
         CHECK1(X509_VERIFY_PARAM_set_flags(param, X509_V_FLAG_PARTIAL_CHAIN));
 
         if (ignore_time)
+        {
           CHECK1(X509_VERIFY_PARAM_set_flags(param, X509_V_FLAG_NO_CHECK_TIME));
+        }
 
         X509_STORE_CTX_set0_param(store_ctx, param);
 
@@ -1058,33 +1104,36 @@ namespace didx509
         {
           X509_STORE_CTX_set_verify_cb(
             store_ctx, [](int ok, X509_STORE_CTX* ctx) {
-              int ec = X509_STORE_CTX_get_error(ctx);
+              const int ec = X509_STORE_CTX_get_error(ctx);
               if (ec == X509_V_ERR_MISSING_AUTHORITY_KEY_IDENTIFIER)
+              {
                 return 1;
+              }
               return ok;
             });
         }
 #endif
 
-        int rc = X509_verify_cert(store_ctx);
+        const int rc = X509_verify_cert(store_ctx);
 
         if (rc == 1)
-          return UqSTACK_OF_X509(store_ctx);
-        else if (rc == 0)
         {
-          int err_code = X509_STORE_CTX_get_error(store_ctx);
-          int depth = X509_STORE_CTX_get_error_depth(store_ctx);
+          return {store_ctx};
+        }
+        
+        if (rc == 0)
+        {
+          const int err_code = X509_STORE_CTX_get_error(store_ctx);
+          const int depth = X509_STORE_CTX_get_error_depth(store_ctx);
           const char* err_str = X509_verify_cert_error_string(err_code);
           throw std::runtime_error(
             std::string("certificate chain verification failed: ") + err_str +
             " (depth: " + std::to_string(depth) + ")");
           throw std::runtime_error("no chain or signature invalid");
         }
-        else
-        {
-          auto msg = std::string(ERR_error_string(ERR_get_error(), nullptr));
-          throw std::runtime_error(std::string("OpenSSL error: ") + msg);
-        }
+
+        auto msg = std::string(ERR_error_string(ERR_get_error(), nullptr));
+        throw std::runtime_error(std::string("OpenSSL error: ") + msg);
       }
     };
 
@@ -1117,7 +1166,7 @@ namespace didx509
       const std::string& fingerprint_alg,
       const std::string& fingerprint)
     {
-      std::unordered_set<std::string> valid_fingerprints;
+      const std::unordered_set<std::string> valid_fingerprints;
 
       for (size_t i = 1; i < chain.size(); i++)
       {
@@ -1125,17 +1174,27 @@ namespace didx509
 
         std::vector<uint8_t> hash;
         if (fingerprint_alg == "sha256")
+        {
           hash = sha256(cert);
+        }
         else if (fingerprint_alg == "sha384")
+        {
           hash = sha384(cert);
+        }
         else if (fingerprint_alg == "sha512")
+        {
           hash = sha512(cert);
+        }
         else
+        {
           throw std::runtime_error("unsupported fingerprint algorithm");
+        }
 
         auto b64 = to_base64url(hash);
         if (fingerprint == b64)
+        {
           return;
+        }
       }
 
       throw std::runtime_error("invalid certificate fingerprint");
@@ -1161,16 +1220,19 @@ namespace didx509
           is_hex_digit(is[i + 2]))
         {
           /* this is two hexadecimal digits following a '%' */
-          char hexstr[3], *ptr;
+          char hexstr[3];
+          char *ptr = nullptr;
           hexstr[0] = is[i + 1];
           hexstr[1] = is[i + 2];
           hexstr[2] = 0;
-          char c = (char)strtoul(hexstr, &ptr, 16);
+          const char c = (char)strtoul(hexstr, &ptr, 16);
           r.push_back(c);
           i += 2;
         }
         else
+        {
           r.push_back(is[i]);
+        }
       }
 
       return r;
@@ -1192,7 +1254,8 @@ namespace didx509
       const std::string& s, const std::string& delimiter)
     {
       std::vector<std::string> r;
-      size_t start = 0, end = 0;
+      size_t start = 0;
+      size_t end = 0;
 
       do
       {
@@ -1209,7 +1272,9 @@ namespace didx509
       auto top_tokens = split(did, "::");
 
       if (top_tokens.size() <= 1)
+      {
         throw std::runtime_error("invalid DID string");
+      }
 
       // Check prefix
       auto prefix = top_tokens[0];
@@ -1217,10 +1282,14 @@ namespace didx509
 
       if (
         pretokens.size() < 5 || pretokens[0] != "did" || pretokens[1] != "x509")
+      {
         throw std::runtime_error("unsupported method/prefix");
+      }
 
       if (pretokens[2] != "0")
+      {
         throw std::runtime_error("unsupported did:x509 version");
+      }
 
       // Check fingerprint
       const auto& ca_fingerprint_alg = pretokens[3];
@@ -1235,7 +1304,9 @@ namespace didx509
         auto parts = split(policy, ":");
 
         if (parts.size() < 2)
+        {
           throw std::runtime_error("invalid policy");
+        }
 
         auto policy_name = parts[0];
         auto args = std::vector<std::string>(parts.begin() + 1, parts.end());
@@ -1243,10 +1314,14 @@ namespace didx509
         if (policy_name == "subject")
         {
           if (args.size() % 2 != 0)
+          {
             throw std::runtime_error("key-value pairs required");
+          }
 
           if (args.size() < 2)
+          {
             throw std::runtime_error("at least one key-value pair is required");
+          }
 
           std::unordered_set<std::string> seen_fields;
           for (size_t j = 0; j < args.size(); j += 2)
@@ -1267,8 +1342,10 @@ namespace didx509
             const auto& v = url_unescape(args[j + 1]);
 
             if (seen_fields.find(k) != seen_fields.end())
+            {
               throw std::runtime_error(
                 std::string("duplicate field '") + k + "'");
+            }
             seen_fields.insert(k);
 
             const auto& lc = chain.at(0);
@@ -1276,8 +1353,10 @@ namespace didx509
 
             auto sit = subject.find(k);
             if (sit == subject.end())
+            {
               throw std::runtime_error(
                 std::string("unsupported subject key: '") + k + "'");
+            }
 
             bool found = false;
             for (const auto& fv : sit->second)
@@ -1289,8 +1368,10 @@ namespace didx509
               }
             }
             if (!found)
+            {
               throw std::runtime_error(
                 std::string("invalid subject key/value: " + k + "=" + v));
+            }
           }
         }
         else if (policy_name == "san")
@@ -1304,8 +1385,10 @@ namespace didx509
           auto san_value = url_unescape(args[1]);
 
           if (!chain.at(0).has_san(san_type, san_value))
+          {
             throw std::runtime_error(
               std::string("SAN not found: ") + san_value);
+          }
         }
         else if (policy_name == "eku")
         {
@@ -1314,7 +1397,7 @@ namespace didx509
             throw std::runtime_error("exactly one EKU required");
           }
 
-          UqASN1_OBJECT oid(args[0]);
+          const UqASN1_OBJECT oid(args[0]);
 
           bool found_eku = false;
           auto eku_exts = chain.at(0).extended_key_usage();
@@ -1322,8 +1405,12 @@ namespace didx509
           {
             const auto& eku_ext_k = eku_exts.at(k);
             for (size_t j = 0; j < eku_ext_k.size() && !found_eku; j++)
+            {
               if (eku_ext_k.at(j) == oid)
+              {
                 found_eku = true;
+              }
+            }
           }
           if (!found_eku)
           {
