@@ -346,30 +346,32 @@ namespace didx509
         {
           throw std::runtime_error("invalid extension type");
         }
-        auto data = static_cast<STACK_OF(GENERAL_NAME)*>(X509V3_EXT_d2i(ext));
-        if (!data)
+        auto * data = static_cast<STACK_OF(GENERAL_NAME)*>(X509V3_EXT_d2i(ext));
+        if (data == nullptr)
         {
           throw std::runtime_error("SAN extension could not be decoded");
         }
         p.reset(data);
       }
 
-      UqSUBJECT_ALT_NAME(UqSUBJECT_ALT_NAME&& other) :
+      UqSUBJECT_ALT_NAME(UqSUBJECT_ALT_NAME&& other) noexcept :
         UqSSLOBJECT(
           nullptr, [](auto x) { sk_GENERAL_NAME_pop_free(x, GENERAL_NAME_free); })
       {
-        p.reset(other.p.release());
+        p = std::move(other.p);
       }
 
-      size_t size() const
+      [[nodiscard]] size_t size() const
       {
         return sk_GENERAL_NAME_num(*this);
       }
 
-      UqGENERAL_NAME at(size_t i) const
+      [[nodiscard]] UqGENERAL_NAME at(size_t i) const
       {
         if (i >= size())
+        {
           throw std::out_of_range("extended key usage index out of range");
+        }
         return sk_GENERAL_NAME_value(*this, i);
       }
     };
@@ -386,28 +388,32 @@ namespace didx509
       UqEXTENDED_KEY_USAGE(const UqX509_EXTENSION& ext) :
         UqSSLOBJECT(nullptr, EXTENDED_KEY_USAGE_free, false)
       {
-        UqASN1_OBJECT ext_obj = UqASN1_OBJECT(X509_EXTENSION_get_object(ext));
-        UqASN1_OBJECT ext_key_obj(NID_ext_key_usage);
+        const UqASN1_OBJECT ext_obj = UqASN1_OBJECT(X509_EXTENSION_get_object(ext));
+        const UqASN1_OBJECT ext_key_obj(NID_ext_key_usage);
         if (ext_obj != ext_key_obj)
+        {
           throw std::runtime_error("invalid extension type");
+        }
         auto data = static_cast<EXTENDED_KEY_USAGE*>(X509V3_EXT_d2i(ext));
         if (!data)
+        {
           throw std::runtime_error("key usage extension could not be decoded");
+        }
         p.reset(data);
       }
 
-      UqEXTENDED_KEY_USAGE(UqEXTENDED_KEY_USAGE&& other) :
+      UqEXTENDED_KEY_USAGE(UqEXTENDED_KEY_USAGE&& other) noexcept :
         UqSSLOBJECT(nullptr, EXTENDED_KEY_USAGE_free, false)
       {
-        p.reset(other.p.release());
+        p = std::move(other.p);
       }
 
-      size_t size() const
+      [[nodiscard]] size_t size() const
       {
         return sk_ASN1_OBJECT_num(*this);
       }
 
-      UqASN1_OBJECT at(size_t i) const
+      [[nodiscard]] UqASN1_OBJECT at(size_t i) const
       {
         if (i >= size())
           throw std::out_of_range("extended key usage index out of range");
@@ -646,24 +652,30 @@ namespace didx509
         return r;
       }
 
-      inline bool has_san(const std::string& san_type, const std::string& value)
+      bool has_san(const std::string& san_type, const std::string& value)
       {
         if (san_type == "dns")
         {
           if (X509_check_host(*this, value.c_str(), value.size(), 0, nullptr) == 1)
+          {
             return true;
+          }
         }
         else if (san_type == "email")
         {
           if (X509_check_email(*this, value.c_str(), value.size(), 0) == 1)
+          {
             return true;
+          }
         }
         else if (san_type == "ipaddress")
         {
           if (
             X509_check_ip(
               *this, (unsigned char*)value.c_str(), value.size(), 0) == 1)
+          {
             return true;
+          }
         }
         else if (san_type == "uri")
         {
@@ -677,9 +689,11 @@ namespace didx509
               {
                 case GEN_URI: {
                   ASN1_STRING* x = san_i->d.uniformResourceIdentifier;
-                  std::string gen_uri = (const char*)ASN1_STRING_get0_data(x);
+                  const std::string gen_uri = (const char*)ASN1_STRING_get0_data(x);
                   if (gen_uri == value)
+                  {
                     return true;
+                  }
                 }
                 default:;
               }
@@ -687,26 +701,27 @@ namespace didx509
           }
         }
         else
+        {
           throw std::runtime_error(
             std::string("unknown SAN type: ") + san_type);
+        }
 
         return false;
       }
 
-      std::vector<uint8_t> der() const
+      [[nodiscard]] std::vector<uint8_t> der() const
       {
-        std::vector<uint8_t> r;
         UqBIO mem;
         i2d_X509_bio(mem, *this);
         return mem.to_vector();
       }
 
-      UqEVP_PKEY public_key() const
+      [[nodiscard]] UqEVP_PKEY public_key() const
       {
         return X509_get0_pubkey(*this);
       }
 
-      std::string public_jwk() const
+      [[nodiscard]] std::string public_jwk() const
       {
         std::string r = "{";
 
@@ -715,9 +730,9 @@ namespace didx509
         switch (base_id)
         {
           case EVP_PKEY_RSA: {
-            r += "\"kty\":\"RSA\",";
+            r += R"("kty":"RSA",)";
 #if defined(OPENSSL_VERSION_MAJOR) && OPENSSL_VERSION_MAJOR >= 3
-            UqEVP_PKEY_CTX ek_ctx(EVP_PKEY_RSA);
+            const UqEVP_PKEY_CTX ek_ctx(EVP_PKEY_RSA);
             auto n = pk.get_bn_param(OSSL_PKEY_PARAM_RSA_N);
             auto e = pk.get_bn_param(OSSL_PKEY_PARAM_RSA_E);
 #else
@@ -727,18 +742,20 @@ namespace didx509
 #endif
             auto n_len = BN_num_bytes(n);
             auto e_len = BN_num_bytes(e);
-            std::vector<uint8_t> nv(n_len), ev(e_len);
+            std::vector<uint8_t> nv(n_len);
+            std::vector<uint8_t> ev(e_len);
             BN_bn2bin(n, nv.data());
             BN_bn2bin(e, ev.data());
-            r += "\"n\":\"" + to_base64url(nv) + "\",";
-            r += "\"e\":\"" + to_base64url(ev) + "\"";
+            r += R"("n":")" + to_base64url(nv) + R"(",)";
+            r += R"("e":")" + to_base64url(ev) + R"(")";
             break;
           }
           case EVP_PKEY_EC: {
-            r += "\"kty\":\"EC\",";
-            r += "\"crv\":\"";
+            r += R"("kty":"EC",)";
+            r += R"("crv":")";
 #if defined(OPENSSL_VERSION_MAJOR) && OPENSSL_VERSION_MAJOR >= 3
-            BIGNUM *x = nullptr, *y = nullptr;
+            BIGNUM *x = nullptr;
+            BIGNUM *y = nullptr;
             EVP_PKEY_get_bn_param(pk, OSSL_PKEY_PARAM_EC_PUB_X, &x);
             EVP_PKEY_get_bn_param(pk, OSSL_PKEY_PARAM_EC_PUB_Y, &y);
             size_t gname_len = 0;
@@ -748,13 +765,21 @@ namespace didx509
               pk, (char*)gname.data(), gname.size(), &gname_len));
             gname.resize(gname_len);
             if (gname == SN_X9_62_prime256v1)
+            {
               r += "P-256";
+            }
             else if (gname == SN_secp384r1)
+            {
               r += "P-384";
+            }
             else if (gname == SN_secp521r1)
+            {
               r += "P-521";
+            }
             else
+            {
               throw std::runtime_error("unsupported EC key curve");
+            }
 #else
             auto ec_key = EVP_PKEY_get0_EC_KEY(pk);
             const EC_GROUP* grp = EC_KEY_get0_group(ec_key);
@@ -763,13 +788,21 @@ namespace didx509
             BIGNUM *x = BN_new(), *y = BN_new();
             CHECK1(EC_POINT_get_affine_coordinates(grp, pnt, x, y, nullptr));
             if (curve_nid == NID_X9_62_prime256v1)
+            {
               r += "P-256";
+            }
             else if (curve_nid == NID_secp384r1)
+            {
               r += "P-384";
+            }
             else if (curve_nid == NID_secp521r1)
+            {
               r += "P-521";
+            }
             else
+            {
               throw std::runtime_error("unsupported EC key curve");
+            }
 #endif
             r += R"(",)";
             auto x_len = BN_num_bytes(x);
