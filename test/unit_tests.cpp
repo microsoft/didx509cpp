@@ -165,6 +165,49 @@ TEST_CASE("TestSubject")
   test_resolve_success(chain, did);
 }
 
+TEST_CASE("TestSubjectWithStateST")
+{
+  auto chain = load_certificate_chain("ms-code-signing.pem");
+  auto did =
+    "did:x509:0:sha256:hH32p4SXlD8n_HLrk_mmNzIKArVh0KkbCeh6eAftfGE"
+    "::subject:CN:Microsoft%20Corporation:ST:Washington";
+  test_resolve_success(chain, did);
+  chain = load_certificate_chain("ms-test.pem");
+  did =
+    "did:x509:0:sha256:m9D3z27ZZ1GTkbzUmpWIZ7lVpg8i3luJeEdKL8utgaY"
+    "::subject:C:US:ST:Washington:L:Redmond:O:Microsoft%20"
+    "Corporation:CN:Code%20Sign%20Test%20%28DO%20NOT%20TRUST%29";
+  test_resolve_success(chain, did);
+}
+
+TEST_CASE("TestSubjectWithStateS")
+{
+  auto chain = load_certificate_chain("ms-code-signing.pem");
+  auto did =
+    "did:x509:0:sha256:hH32p4SXlD8n_HLrk_mmNzIKArVh0KkbCeh6eAftfGE"
+    "::subject:CN:Microsoft%20Corporation:S:Washington";
+  test_resolve_success(chain, did);
+  chain = load_certificate_chain("ms-test.pem");
+  did =
+    "did:x509:0:sha256:m9D3z27ZZ1GTkbzUmpWIZ7lVpg8i3luJeEdKL8utgaY"
+    "::subject:C:US:S:Washington:L:Redmond:O:Microsoft%20"
+    "Corporation:CN:Code%20Sign%20Test%20%28DO%20NOT%20TRUST%29";
+  test_resolve_success(chain, did);
+}
+
+TEST_CASE("TestSubjectWithStateSandST")
+{
+  auto chain = load_certificate_chain("ms-code-signing.pem");
+  auto did =
+    "did:x509:0:sha256:hH32p4SXlD8n_HLrk_mmNzIKArVh0KkbCeh6eAftfGE"
+    "::subject:CN:Microsoft%20Corporation:S:Washington:ST:Washington";
+  test_resolve_error(chain, did, "duplicate field 'ST'");
+  did =
+    "did:x509:0:sha256:hH32p4SXlD8n_HLrk_mmNzIKArVh0KkbCeh6eAftfGE"
+    "::subject:CN:Microsoft%20Corporation:ST:Washington:S:Washington";
+  test_resolve_error(chain, did, "duplicate field 'ST'");
+}
+
 TEST_CASE("TestSubjectInvalidName")
 {
   auto chain = load_certificate_chain("ms-code-signing.pem");
