@@ -623,33 +623,33 @@ namespace didx509
         return X509_get0_subject_key_id(*this) != nullptr;
       }
 
-      std::string subject_key_id() const
+      [[nodiscard]] std::string subject_key_id() const
       {
         const ASN1_OCTET_STRING* key_id = X509_get0_subject_key_id(*this);
-        if (!key_id)
+        if (key_id == nullptr)
+        {
           throw std::runtime_error(
             "certificate does not contain a subject key id");
-        char* c = i2s_ASN1_OCTET_STRING(nullptr, key_id);
-        std::string r = c;
-        free(c);
-        return r;
+          }
+        const std::unique_ptr<char, decltype(&free)> c(i2s_ASN1_OCTET_STRING(nullptr, key_id), free);
+        return {c.get()};
       }
 
-      bool has_authority_key_id() const
+      [[nodiscard]] bool has_authority_key_id() const
       {
         return X509_get0_authority_key_id(*this) != nullptr;
       }
 
-      std::string authority_key_id() const
+      [[nodiscard]] std::string authority_key_id() const
       {
         const ASN1_OCTET_STRING* key_id = X509_get0_authority_key_id(*this);
-        if (!key_id)
+        if (key_id == nullptr)
+        {
           throw std::runtime_error(
             "certificate does not contain an authority key id");
-        char* c = i2s_ASN1_OCTET_STRING(nullptr, key_id);
-        std::string r = c;
-        free(c);
-        return r;
+        }
+        const std::unique_ptr<char, decltype(&free)> c(i2s_ASN1_OCTET_STRING(nullptr, key_id), free);
+        return {c.get()};
       }
 
       bool has_san(const std::string& san_type, const std::string& value)
