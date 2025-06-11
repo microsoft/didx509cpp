@@ -10,6 +10,7 @@
 #include <ctime>
 #include <initializer_list>
 #include <memory>
+#include <map>
 #include <openssl/asn1.h>
 #include <openssl/bio.h>
 #include <openssl/bn.h>
@@ -394,8 +395,8 @@ namespace didx509
         {
           throw std::runtime_error("invalid extension type");
         }
-        auto data = static_cast<EXTENDED_KEY_USAGE*>(X509V3_EXT_d2i(ext));
-        if (!data)
+        auto * data = static_cast<EXTENDED_KEY_USAGE*>(X509V3_EXT_d2i(ext));
+        if (data == nullptr)
         {
           throw std::runtime_error("key usage extension could not be decoded");
         }
@@ -416,8 +417,10 @@ namespace didx509
       [[nodiscard]] UqASN1_OBJECT at(size_t i) const
       {
         if (i >= size())
+        {
           throw std::out_of_range("extended key usage index out of range");
-        return UqASN1_OBJECT(sk_ASN1_OBJECT_value(*this, i));
+        }
+        return {sk_ASN1_OBJECT_value(*this, i)};
       }
     };
 
@@ -430,10 +433,10 @@ namespace didx509
 
       UqEVP_PKEY(const EVP_PKEY* key);
 
-      UqEVP_PKEY(UqEVP_PKEY&& other) :
+      UqEVP_PKEY(UqEVP_PKEY&& other) noexcept :
         UqSSLOBJECT(nullptr, EVP_PKEY_free, false)
       {
-        p.reset(other.p.release());
+        p = std::move(other.p);
       }
 
       bool operator==(const UqEVP_PKEY& other) const
@@ -450,7 +453,7 @@ namespace didx509
         return !(*this == other);
       }
 
-      bool verify_signature(
+      [[nodiscard]] bool verify_signature(
         const std::vector<uint8_t>& message,
         const std::vector<uint8_t>& signature) const;
 
@@ -482,7 +485,7 @@ namespace didx509
           check_null)
       {}
 
-      UqX509(UqX509&& other) : UqSSLOBJECT(nullptr, X509_free, false)
+      UqX509(UqX509&& other) noexcept : UqSSLOBJECT(nullptr, X509_free, false)
       {
         X509* ptr = other;
         other.release();
@@ -494,31 +497,34 @@ namespace didx509
         X509_up_ref(x509);
       }
 
-      UqX509& operator=(const UqX509& other)
+      UqX509& operator=(const UqX509& other) noexcept
       {
-        X509_up_ref(other);
-        p.reset(other.p.get());
+        if (this != &other)
+        {
+          X509_up_ref(other);
+          p.reset(other.p.get());
+        }
         return *this;
       }
 
-      UqX509& operator=(UqX509&& other)
+      UqX509& operator=(UqX509&& other) noexcept
       {
-        p.reset(other.p.release());
+        p = std::move(other.p);
         return *this;
       }
 
-      bool is_ca() const
+      [[nodiscard]] bool is_ca() const
       {
         return X509_check_ca(p.get()) != 0;
       }
 
-      int extension_index(const std::string& oid) const
+      [[nodiscard]] int extension_index(const std::string& oid) const
       {
-        return X509_get_ext_by_OBJ(*this, UqASN1_OBJECT(oid.c_str()), -1);
+        return X509_get_ext_by_OBJ(*this, UqASN1_OBJECT(oid), -1);
       }
 
       template <typename T>
-      std::vector<T> extensions(const UqASN1_OBJECT& obj) const
+      [[nodiscard]] std::vector<T> extensions(const UqASN1_OBJECT& obj) const
       {
         std::vector<T> r;
         auto count = X509_get_ext_count(*this);
@@ -527,53 +533,55 @@ namespace didx509
         {
           index = X509_get_ext_by_OBJ(*this, obj, index);
           if (index != -1)
+          {
             r.emplace_back(X509_get_ext(*this, index));
+          }
         } while (index != -1 && index < count);
         return r;
       }
 
       template <typename T>
-      std::vector<T> extensions(const std::string& oid) const
+      [[nodiscard]] std::vector<T> extensions(const std::string& oid) const
       {
         return extensions<T>(UqASN1_OBJECT(oid));
       }
 
-      std::vector<UqSUBJECT_ALT_NAME> subject_alternative_name() const
+      [[nodiscard]] std::vector<UqSUBJECT_ALT_NAME> subject_alternative_name() const
       {
         return extensions<UqSUBJECT_ALT_NAME>(
           UqASN1_OBJECT(NID_subject_alt_name));
       };
 
-      std::vector<UqEXTENDED_KEY_USAGE> extended_key_usage() const
+      [[nodiscard]] std::vector<UqEXTENDED_KEY_USAGE> extended_key_usage() const
       {
         return extensions<UqEXTENDED_KEY_USAGE>(
           UqASN1_OBJECT(NID_ext_key_usage));
       };
 
-      bool has_key_usage() const
+      [[nodiscard]] bool has_key_usage() const
       {
         return (X509_get_extension_flags(*this) & EXFLAG_KUSAGE) != 0;
       }
 
-      bool has_key_usage_digital_signature() const
+      [[nodiscard]] bool has_key_usage_digital_signature() const
       {
         return has_key_usage() &&
           (X509_get_key_usage(*this) & KU_DIGITAL_SIGNATURE) != 0;
       }
 
-      bool has_key_usage_key_agreement() const
+      [[nodiscard]] bool has_key_usage_key_agreement() const
       {
         return has_key_usage() &&
           (X509_get_key_usage(*this) & KU_KEY_AGREEMENT) != 0;
       }
 
-      bool has_common_name(const std::string& expected_name) const;
+      [[nodiscard]] bool has_common_name(const std::string& expected_name) const;
 
-      std::map<std::string, std::vector<std::string>> subject() const
+      [[nodiscard]] std::map<std::string, std::vector<std::string>> subject() const
       {
         std::map<std::string, std::vector<std::string>> r;
 
-        auto name = X509_get_subject_name(*this);
+        auto * name = X509_get_subject_name(*this);
         CHECKNULL(name);
         auto n = X509_NAME_entry_count(name);
         for (auto i = 0; i < n; i++)
@@ -598,10 +606,12 @@ namespace didx509
 
           auto snit = short_name_map.find(OBJ_obj2nid(oid));
           if (snit != short_name_map.end())
+          {
             key = snit->second;
+          }
           else
           {
-            int sz = OBJ_obj2txt(nullptr, 0, oid, 1);
+            const int sz = OBJ_obj2txt(nullptr, 0, oid, 1);
             key.resize(sz + 1, 0);
             OBJ_obj2txt((char*)key.data(), key.size(), oid, 1);
           }
@@ -618,7 +628,7 @@ namespace didx509
         return r;
       }
 
-      bool has_subject_key_id() const
+      [[nodiscard]] bool has_subject_key_id() const
       {
         return X509_get0_subject_key_id(*this) != nullptr;
       }

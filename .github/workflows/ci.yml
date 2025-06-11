@@ -88,7 +88,7 @@ jobs:
 
       - name: Build dependencies
         shell: bash
-        run: tdnf -y install build-essential cmake openssl-devel curl-devel
+        run: tdnf -y install build-essential cmake openssl-devel curl-devel clang-tools-extra
 
       - name: Create Build Environment
         run: cmake -E make_directory build/${{ matrix.build_type }}
@@ -103,6 +103,11 @@ jobs:
         working-directory: build/${{ matrix.build_type }}
         shell: bash
         run: cmake --build . --config ${{ matrix.build_type }}
+
+      - name: Clang-Tidy
+        working-directory: build/${{ matrix.build_type }}
+        shell: bash
+        run: clang-tidy ../didx509cpp.h
 
       - name: Test
         working-directory: build/${{ matrix.build_type }}
