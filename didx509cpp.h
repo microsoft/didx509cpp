@@ -3,12 +3,12 @@
 
 #pragma once
 
-#include <climits>
 #include <cstring>
 #include <cstdint>
 #include <cstdlib>
 #include <ctime>
 #include <initializer_list>
+#include <limits>
 #include <memory>
 #include <map>
 #include <openssl/asn1.h>
@@ -1127,7 +1127,7 @@ namespace didx509
         CHECK1(X509_STORE_CTX_init(store_ctx, store, target, *this));
 
         X509_VERIFY_PARAM* param = X509_VERIFY_PARAM_new();
-        X509_VERIFY_PARAM_set_depth(param, INT_MAX);
+        X509_VERIFY_PARAM_set_depth(param, std::numeric_limits<int>::max());
         X509_VERIFY_PARAM_set_auth_level(param, 0);
 
         CHECK1(X509_VERIFY_PARAM_set_flags(param, X509_V_FLAG_X509_STRICT));
