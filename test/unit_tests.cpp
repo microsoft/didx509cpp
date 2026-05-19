@@ -52,13 +52,24 @@ void test_resolve_success(const std::string& chain, const std::string& did)
   std::string did_doc;
   REQUIRE_NOTHROW(did_doc = resolve(chain, did, true));
   // Verify that resolved DID document is valid JSON
-  REQUIRE_NOTHROW(auto _ = nlohmann::json::parse(did_doc));
+  nlohmann::json doc;
+  REQUIRE_NOTHROW(doc = nlohmann::json::parse(did_doc));
+  CHECK(doc["@context"] == "https://www.w3.org/ns/did/v1");
+  CHECK(doc["id"] == did);
+  REQUIRE(doc["verificationMethod"].is_array());
+  REQUIRE(doc["verificationMethod"].size() == 1);
+  CHECK(doc["verificationMethod"][0]["id"] == did + "#key-1");
+  CHECK(doc["verificationMethod"][0]["type"] == "JsonWebKey2020");
+  CHECK(doc["verificationMethod"][0]["controller"] == did);
+  CHECK(doc["verificationMethod"][0]["publicKeyJwk"].contains("kty"));
   
   std::string jwk;
   const auto split_chain = split_x509_cert_bundle(chain);
   REQUIRE_NOTHROW(jwk = resolve_jwk(split_chain, did, true));
   // Verify that resolved JWK is valid JSON
-  REQUIRE_NOTHROW(auto _ = nlohmann::json::parse(jwk));
+  nlohmann::json jwk_doc;
+  REQUIRE_NOTHROW(jwk_doc = nlohmann::json::parse(jwk));
+  CHECK(jwk_doc.contains("kty"));
 }
 
 void test_resolve_error(
@@ -146,6 +157,29 @@ TEST_CASE("TestInvalidCA")
   test_resolve_error(chain, did, "invalid certificate fingerprint");
 }
 
+TEST_CASE("TestFingerprintAlgorithms")
+{
+  auto chain = load_certificate_chain("ms-code-signing.pem");
+  auto did =
+    "did:x509:0:sha384:tg8BQvQznAnlqwHWedNqMSKxsf-_dDmEB7qsgYP0eamWeA5M5UNdgPQWMtCdWkoz"
+    "::subject:CN:Microsoft%20Corporation";
+  test_resolve_success(chain, did);
+
+  did =
+    "did:x509:0:sha512:Lr_EwX4kGmZfVYvMsDil-xCnPgXbVSox4_Dq5IqTyWF9Kklo952md9y82x16FAvphIqromFhlI19tEtOq7sHYw"
+    "::subject:CN:Microsoft%20Corporation";
+  test_resolve_success(chain, did);
+}
+
+TEST_CASE("TestUnsupportedFingerprintAlgorithm")
+{
+  auto chain = load_certificate_chain("ms-code-signing.pem");
+  auto did =
+    "did:x509:0:sha1:hH32p4SXlD8n_HLrk_mmNzIKArVh0KkbCeh6eAftfGE"
+    "::subject:CN:Microsoft%20Corporation";
+  test_resolve_error(chain, did, "unsupported fingerprint algorithm");
+}
+
 TEST_CASE("TestMultiplePolicies")
 {
   auto chain = load_certificate_chain("ms-code-signing.pem");
@@ -226,6 +260,48 @@ TEST_CASE("TestSubjectDuplicateField")
   test_resolve_error(chain, did, "duplicate field");
 }
 
+TEST_CASE("TestDIDParserErrors")
+{
+  auto chain = load_certificate_chain("ms-code-signing.pem");
+  auto did = "did:x509:0:sha256:hH32p4SXlD8n_HLrk_mmNzIKArVh0KkbCeh6eAftfGE";
+  test_resolve_error(chain, did, "invalid DID string");
+
+  did =
+    "did:x509:1:sha256:hH32p4SXlD8n_HLrk_mmNzIKArVh0KkbCeh6eAftfGE"
+    "::subject:CN:Microsoft%20Corporation";
+  test_resolve_error(chain, did, "unsupported did:x509 version");
+
+  did =
+    "did:x509:0:sha256:hH32p4SXlD8n_HLrk_mmNzIKArVh0KkbCeh6eAftfGE"
+    "::subject";
+  test_resolve_error(chain, did, "invalid policy");
+
+  did =
+    "did:x509:0:sha256:hH32p4SXlD8n_HLrk_mmNzIKArVh0KkbCeh6eAftfGE"
+    "::subject:CN";
+  test_resolve_error(chain, did, "key-value pairs required");
+
+  did =
+    "did:x509:0:sha256:hH32p4SXlD8n_HLrk_mmNzIKArVh0KkbCeh6eAftfGE"
+    "::subject:DC:example";
+  test_resolve_error(chain, did, "unsupported subject key");
+
+  did =
+    "did:x509:0:sha256:hH32p4SXlD8n_HLrk_mmNzIKArVh0KkbCeh6eAftfGE"
+    "::san:email";
+  test_resolve_error(chain, did, "exactly one SAN type and value required");
+
+  did =
+    "did:x509:0:sha256:hH32p4SXlD8n_HLrk_mmNzIKArVh0KkbCeh6eAftfGE"
+    "::eku:1.2.3:1.2.4";
+  test_resolve_error(chain, did, "exactly one EKU required");
+
+  did =
+    "did:x509:0:sha256:hH32p4SXlD8n_HLrk_mmNzIKArVh0KkbCeh6eAftfGE"
+    "::fulcio-issuer:issuer:extra";
+  test_resolve_error(chain, did, "excessive arguments to fulcio-issuer");
+}
+
 TEST_CASE("TestSAN")
 {
   auto chain = load_certificate_chain("fulcio-email.pem");
@@ -251,6 +327,29 @@ TEST_CASE("TestSANInvalidValue")
     "did:x509:0:sha256:O6e2zE6VRp1NM0tJyyV62FNwdvqEsMqH_07P5qVGgME"
     "::email:bob%40example.com";
   test_resolve_error(chain, did, "unsupported did:x509 scheme");
+}
+
+TEST_CASE("TestSANWithDnsAndIpAddress")
+{
+  auto chain = load_certificate_chain("dns-ip-san.pem");
+  auto did =
+    "did:x509:0:sha256:CRyhhLjPjmtip5N_ypeo5zb59Wjyn0eiB9Q3rnybOd8"
+    "::san:dns:san-test.example.com";
+  test_resolve_success(chain, did);
+
+  did =
+    "did:x509:0:sha256:CRyhhLjPjmtip5N_ypeo5zb59Wjyn0eiB9Q3rnybOd8"
+    "::san:ipaddress:127.0.0.1";
+  test_resolve_success(chain, did);
+}
+
+TEST_CASE("TestSANUnknownType")
+{
+  auto chain = load_certificate_chain("dns-ip-san.pem");
+  auto did =
+    "did:x509:0:sha256:CRyhhLjPjmtip5N_ypeo5zb59Wjyn0eiB9Q3rnybOd8"
+    "::san:other:value";
+  test_resolve_error(chain, did, "unknown SAN type");
 }
 
 TEST_CASE("TestBadEKU")
@@ -300,6 +399,47 @@ TEST_CASE("TestFulcioIssuerWithURISAN")
     "delivery-lab-files%2F.github%2Fworkflows%2Ffabrikam-web.yml%40refs%"
     "2Fheads%2Fmain";
   test_resolve_success(chain, did);
+}
+
+TEST_CASE("TestInvalidFulcioIssuer")
+{
+  auto chain = load_certificate_chain("fulcio-email.pem");
+  auto did =
+    "did:x509:0:sha256:O6e2zE6VRp1NM0tJyyV62FNwdvqEsMqH_07P5qVGgME"
+    "::fulcio-issuer:example.com"
+    "::san:email:igarcia%40suse.com";
+  test_resolve_error(chain, did, "invalid fulcio-issuer");
+}
+
+TEST_CASE("TestDIDDocumentKeyUsageSections")
+{
+  auto chain = load_certificate_chain("ms-code-signing.pem");
+  std::string did =
+    "did:x509:0:sha256:hH32p4SXlD8n_HLrk_mmNzIKArVh0KkbCeh6eAftfGE"
+    "::subject:CN:Microsoft%20Corporation";
+  auto doc = nlohmann::json::parse(resolve(chain, did, true));
+  CHECK(doc["assertionMethod"] == did + "#key-1");
+  CHECK(doc["keyAgreement"] == did + "#key-1");
+
+  chain = load_certificate_chain("dns-ip-san.pem");
+  did =
+    "did:x509:0:sha256:CRyhhLjPjmtip5N_ypeo5zb59Wjyn0eiB9Q3rnybOd8"
+    "::san:dns:san-test.example.com";
+  doc = nlohmann::json::parse(resolve(chain, did, true));
+  CHECK(doc["assertionMethod"] == did + "#key-1");
+  CHECK_FALSE(doc.contains("keyAgreement"));
+}
+
+TEST_CASE("TestResolveChainDirectly")
+{
+  auto chain_pem = load_certificate_chain("ms-code-signing.pem");
+  UqSTACK_OF_X509 chain(chain_pem);
+  auto did =
+    "did:x509:0:sha256:hH32p4SXlD8n_HLrk_mmNzIKArVh0KkbCeh6eAftfGE"
+    "::subject:CN:Microsoft%20Corporation";
+  auto valid_chain = resolve_chain(chain, did, true);
+  CHECK(valid_chain.size() == 3);
+  CHECK(nlohmann::json::parse(valid_chain.front().public_jwk()).contains("kty"));
 }
 
 TEST_CASE("TestInvalidLeafOnly")

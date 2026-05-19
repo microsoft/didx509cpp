@@ -680,9 +680,18 @@ namespace didx509
         }
         else if (san_type == "ipaddress")
         {
+          std::unique_ptr<ASN1_OCTET_STRING, decltype(&ASN1_OCTET_STRING_free)>
+            ip(a2i_IPADDRESS(value.c_str()), ASN1_OCTET_STRING_free);
+          if (ip == nullptr)
+          {
+            return false;
+          }
           if (
             X509_check_ip(
-              *this, (unsigned char*)value.c_str(), value.size(), 0) == 1)
+              *this,
+              ASN1_STRING_get0_data(ip.get()),
+              ASN1_STRING_length(ip.get()),
+              0) == 1)
           {
             return true;
           }
