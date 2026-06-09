@@ -39,7 +39,7 @@ jobs:
         if: matrix.compiler == 'clang++-18'
         run: sudo apt install clang-18
 
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
 
       - name: Create Build Environment
         run: cmake -E make_directory build/${{ matrix.build_type }}
@@ -84,7 +84,7 @@ jobs:
         if: matrix.compiler == 'clang++'
         run: tdnf -y install clang
 
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
 
       - name: Build dependencies
         shell: bash
