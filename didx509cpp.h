@@ -678,15 +678,6 @@ namespace didx509
             return true;
           }
         }
-        else if (san_type == "ipaddress")
-        {
-          if (
-            X509_check_ip(
-              *this, (unsigned char*)value.c_str(), value.size(), 0) == 1)
-          {
-            return true;
-          }
-        }
         else if (san_type == "uri")
         {
           auto san_exts = subject_alternative_name();
