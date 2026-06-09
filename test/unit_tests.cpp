@@ -338,6 +338,15 @@ TEST_CASE("TestSANWithDns")
   test_resolve_success(chain, did);
 }
 
+TEST_CASE("TestSANWithIpAddressRejected")
+{
+  auto chain = load_certificate_chain("dns-ip-san.pem");
+  auto did =
+    "did:x509:0:sha256:CRyhhLjPjmtip5N_ypeo5zb59Wjyn0eiB9Q3rnybOd8"
+    "::san:ipaddress:127.0.0.1";
+  test_resolve_error(chain, did, "unknown SAN type: ipaddress");
+}
+
 TEST_CASE("TestSANUnknownType")
 {
   auto chain = load_certificate_chain("dns-san.pem");
