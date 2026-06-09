@@ -463,7 +463,7 @@ int main(int argc, char** argv)
   doctest::Context ctx;
   ctx.applyCommandLine(argc, argv);
   for (size_t i = 0; i < argc; i++)
-    if (strcmp(argv[i], "--data-dir") == 0 && i < argc - 1)
+    if (i < argc - 1 && strcmp(argv[i], "--data-dir") == 0)
       test_data_dir = argv[i + 1];
   return ctx.run();
 }
