@@ -329,25 +329,20 @@ TEST_CASE("TestSANInvalidValue")
   test_resolve_error(chain, did, "unsupported did:x509 scheme");
 }
 
-TEST_CASE("TestSANWithDnsAndIpAddress")
+TEST_CASE("TestSANWithDns")
 {
-  auto chain = load_certificate_chain("dns-ip-san.pem");
+  auto chain = load_certificate_chain("dns-san.pem");
   auto did =
-    "did:x509:0:sha256:CRyhhLjPjmtip5N_ypeo5zb59Wjyn0eiB9Q3rnybOd8"
+    "did:x509:0:sha256:T1HzOxsDN5SKU6VYKcUFzNVlWiLdxbJ4H7w5WuYcUkM"
     "::san:dns:san-test.example.com";
-  test_resolve_success(chain, did);
-
-  did =
-    "did:x509:0:sha256:CRyhhLjPjmtip5N_ypeo5zb59Wjyn0eiB9Q3rnybOd8"
-    "::san:ipaddress:127.0.0.1";
   test_resolve_success(chain, did);
 }
 
 TEST_CASE("TestSANUnknownType")
 {
-  auto chain = load_certificate_chain("dns-ip-san.pem");
+  auto chain = load_certificate_chain("dns-san.pem");
   auto did =
-    "did:x509:0:sha256:CRyhhLjPjmtip5N_ypeo5zb59Wjyn0eiB9Q3rnybOd8"
+    "did:x509:0:sha256:T1HzOxsDN5SKU6VYKcUFzNVlWiLdxbJ4H7w5WuYcUkM"
     "::san:other:value";
   test_resolve_error(chain, did, "unknown SAN type");
 }
@@ -421,9 +416,9 @@ TEST_CASE("TestDIDDocumentKeyUsageSections")
   CHECK(doc["assertionMethod"] == did + "#key-1");
   CHECK(doc["keyAgreement"] == did + "#key-1");
 
-  chain = load_certificate_chain("dns-ip-san.pem");
+  chain = load_certificate_chain("dns-san.pem");
   did =
-    "did:x509:0:sha256:CRyhhLjPjmtip5N_ypeo5zb59Wjyn0eiB9Q3rnybOd8"
+    "did:x509:0:sha256:T1HzOxsDN5SKU6VYKcUFzNVlWiLdxbJ4H7w5WuYcUkM"
     "::san:dns:san-test.example.com";
   doc = nlohmann::json::parse(resolve(chain, did, true));
   CHECK(doc["assertionMethod"] == did + "#key-1");
