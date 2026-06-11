@@ -458,6 +458,64 @@ TEST_CASE("TestInvalidLeafOnly")
     doctest::Contains("certificate chain too short"));
 }
 
+static std::vector<uint8_t> base64url_decode(const std::string& in)
+{
+  auto sextet = [](char c) -> int {
+    if (c >= 'A' && c <= 'Z')
+      return c - 'A';
+    if (c >= 'a' && c <= 'z')
+      return c - 'a' + 26;
+    if (c >= '0' && c <= '9')
+      return c - '0' + 52;
+    if (c == '-')
+      return 62;
+    if (c == '_')
+      return 63;
+    return -1;
+  };
+  std::vector<uint8_t> out;
+  int buf = 0;
+  int bits = 0;
+  for (char c : in)
+  {
+    const int v = sextet(c);
+    if (v < 0)
+      continue;
+    buf = (buf << 6) | v;
+    bits += 6;
+    if (bits >= 8)
+    {
+      bits -= 8;
+      out.push_back(static_cast<uint8_t>((buf >> bits) & 0xFF));
+    }
+  }
+  return out;
+}
+
+TEST_CASE("TestEcJwkCoordinatePadding")
+{
+  // ec-leading-zero.pem has an EC P-256 leaf whose x coordinate begins with a
+  // zero byte. RFC 7518 requires both coordinates to be encoded as the full
+  // 32-octet field element, so the JWK must left-pad them rather than emit the
+  // minimal (31-octet) big-endian integer encoding.
+  auto chain = load_certificate_chain("ec-leading-zero.pem");
+  auto did =
+    "did:x509:0:sha256:SGI1ucfnPQ6_Rx2YIurUyv75tHSapBv2_aiXaGtxP8w"
+    "::subject:CN:didx509cpp%20EC%20Test%20Leaf";
+
+  auto doc = nlohmann::json::parse(resolve(chain, did, true));
+  auto jwk = doc["verificationMethod"][0]["publicKeyJwk"];
+  CHECK(jwk["kty"] == "EC");
+  CHECK(jwk["crv"] == "P-256");
+
+  const auto x = base64url_decode(jwk["x"].get<std::string>());
+  const auto y = base64url_decode(jwk["y"].get<std::string>());
+  CHECK(x.size() == 32);
+  CHECK(y.size() == 32);
+  // The fixture's leading zero byte must be preserved by the padding.
+  CHECK(x.front() == 0x00);
+}
+
 int main(int argc, char** argv)
 {
   doctest::Context ctx;
