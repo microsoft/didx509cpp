@@ -1154,7 +1154,10 @@ namespace didx509
 
         X509_VERIFY_PARAM* param = X509_VERIFY_PARAM_new();
         X509_VERIFY_PARAM_set_depth(param, std::numeric_limits<int>::max());
-        X509_VERIFY_PARAM_set_auth_level(param, 0);
+        // Require at least 112-bit-equivalent security (OpenSSL level 2):
+        // RSA/DSA/DH keys >= 2048 bits, ECC keys >= 224 bits, no RC4 or MD5.
+        // See https://docs.openssl.org/master/man3/SSL_CTX_set_security_level/
+        X509_VERIFY_PARAM_set_auth_level(param, 2);
 
         CHECK1(X509_VERIFY_PARAM_set_flags(param, X509_V_FLAG_X509_STRICT));
         CHECK1(
