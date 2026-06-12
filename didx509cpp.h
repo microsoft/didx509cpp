@@ -289,7 +289,7 @@ namespace didx509
         {
           return {};
         }
-        return std::string(data, data + static_cast<size_t>(len));
+        return {data, data + static_cast<size_t>(len)};
       }
     };
 
@@ -640,7 +640,7 @@ namespace didx509
               "could not convert subject attribute value to UTF-8");
           }
           const auto utf8_deleter = [](unsigned char* p) { OPENSSL_free(p); };
-          std::unique_ptr<unsigned char, decltype(utf8_deleter)> utf8(
+          const std::unique_ptr<unsigned char, decltype(utf8_deleter)> utf8(
             utf8_raw, utf8_deleter);
 
           std::string value;
@@ -765,8 +765,8 @@ namespace didx509
             {
               continue;
             }
-            const std::string san_value(
-              reinterpret_cast<const char*>(data), static_cast<size_t>(len));
+            const std::string san_value{
+              data, data + static_cast<size_t>(len)};
             if (san_value == value)
             {
               return true;
