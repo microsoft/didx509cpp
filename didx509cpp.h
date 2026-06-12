@@ -25,7 +25,6 @@
 #include <openssl/x509.h>
 #include <openssl/x509_vfy.h>
 #include <openssl/x509v3.h>
-#include <regex>
 #include <stdexcept>
 #include <string>
 #include <unordered_set>
@@ -1576,44 +1575,95 @@ namespace didx509
       return {include_assertion_method, include_key_agreement};
     }
 
+    // Escape a string so it can be safely embedded inside a JSON string
+    // literal. The did is attacker-influenced input; without escaping, a did
+    // containing '"', '\\' or control characters could break out of the JSON
+    // string and corrupt or inject structure into the resulting document.
+    inline std::string json_escape_string(const std::string& s)
+    {
+      static const char* const hex = "0123456789abcdef";
+      std::string r;
+      r.reserve(s.size() + 2);
+      for (const char ch : s)
+      {
+        const auto c = static_cast<unsigned char>(ch);
+        switch (c)
+        {
+          case '"':
+            r += "\\\"";
+            break;
+          case '\\':
+            r += "\\\\";
+            break;
+          case '\b':
+            r += "\\b";
+            break;
+          case '\f':
+            r += "\\f";
+            break;
+          case '\n':
+            r += "\\n";
+            break;
+          case '\r':
+            r += "\\r";
+            break;
+          case '\t':
+            r += "\\t";
+            break;
+          default:
+            if (c < 0x20)
+            {
+              r += "\\u00";
+              r += hex[(c >> 4) & 0xF];
+              r += hex[c & 0xF];
+            }
+            else
+            {
+              r += static_cast<char>(c);
+            }
+        }
+      }
+      return r;
+    }
+
     inline std::string create_did_document(
       const std::string& did, const UqSTACK_OF_X509& chain)
     {
-      const std::string format = R"({
-    "@context": "https://www.w3.org/ns/did/v1",
-    "id": "_DID_",
-    "verificationMethod": [{
-        "id": "_DID_#key-1",
-        "type": "JsonWebKey2020",
-        "controller": "_DID_",
-        "publicKeyJwk": _LEAF_JWK_
-    }]
-    _ASSERTION_METHOD_
-    _KEY_AGREEMENT_
-})";
-
       const auto& leaf = chain.front();
-      const auto& [include_assertion_method, include_key_agreement] = is_agreed_signature_key(leaf);
+      const auto& [include_assertion_method, include_key_agreement] =
+        is_agreed_signature_key(leaf);
 
-      std::string am;
-      std::string ka;
+      // The did is escaped before being embedded in the JSON document. The
+      // leaf JWK is produced internally from base64url-encoded values and a
+      // fixed set of keys, so it is inserted verbatim as a JSON object.
+      const std::string did_json = json_escape_string(did);
+      const auto& leaf_jwk = leaf.public_jwk();
+
+      std::string r = R"({
+    "@context": "https://www.w3.org/ns/did/v1",
+    "id": ")" + did_json +
+        R"(",
+    "verificationMethod": [{
+        "id": ")" + did_json +
+        R"(#key-1",
+        "type": "JsonWebKey2020",
+        "controller": ")" + did_json +
+        R"(",
+        "publicKeyJwk": )" + leaf_jwk +
+        R"(
+    }])";
+
       if (include_assertion_method)
       {
-        am = R"(,"assertionMethod": ")" + did + R"(#key-1")";
+        r += R"(,"assertionMethod": ")" + did_json + R"(#key-1")";
       }
       if (include_key_agreement)
       {
-        ka = R"(,"keyAgreement": ")" + did + R"(#key-1")";
+        r += R"(,"keyAgreement": ")" + did_json + R"(#key-1")";
       }
 
-      const auto& leaf_jwk = leaf.public_jwk();
-
-      auto t = std::regex_replace(format, std::regex("_DID_"), did);
-      t = std::regex_replace(t, std::regex("_ASSERTION_METHOD_"), am);
-      t = std::regex_replace(t, std::regex("_KEY_AGREEMENT_"), ka);
-      t = std::regex_replace(t, std::regex("_LEAF_JWK_"), leaf_jwk);
-
-      return t;
+      r += "\n}";
+      return r;
     }
   }
 
