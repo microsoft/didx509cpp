@@ -501,6 +501,26 @@ TEST_CASE("TestResolveChainDirectly")
   CHECK(nlohmann::json::parse(valid_chain.front().public_jwk()).contains("kty"));
 }
 
+TEST_CASE("TestVerifyHonorsProvidedRoots")
+{
+  // verify() must anchor trust on the roots it is given, not on the chain's
+  // own last certificate. The loop previously added back() (the chain's last
+  // certificate) for every entry in `roots`, ignoring the provided roots.
+  UqSTACK_OF_X509 chain(load_certificate_chain("ms-code-signing.pem"));
+
+  // A certificate from an unrelated chain that signed nothing in `chain`.
+  UqSTACK_OF_X509 unrelated(load_certificate_chain("fulcio-email.pem"));
+  std::vector<UqX509> roots;
+  roots.emplace_back(unrelated.back());
+
+  // With trust anchored only on the unrelated root, there is no valid path, so
+  // verification must fail. The previous code ignored `roots` and trusted
+  // chain.back(), which made this wrongly succeed.
+  REQUIRE_THROWS_WITH(
+    (void)chain.verify(roots, true),
+    doctest::Contains("certificate chain verification failed"));
+}
+
 TEST_CASE("TestInvalidLeafOnly")
 {
   auto chain = load_certificate_chain("containerplat-leaf.pem");
