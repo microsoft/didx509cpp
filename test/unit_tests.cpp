@@ -3,6 +3,8 @@
 
 #include "didx509cpp.h"
 
+#include <openssl/evp.h>
+
 #include <string>
 
 #define DOCTEST_CONFIG_IMPLEMENT
@@ -480,35 +482,23 @@ TEST_CASE("TestInvalidLeafOnly")
 
 static std::vector<uint8_t> base64url_decode(const std::string& in)
 {
-  auto sextet = [](char c) -> int {
-    if (c >= 'A' && c <= 'Z')
-      return c - 'A';
-    if (c >= 'a' && c <= 'z')
-      return c - 'a' + 26;
-    if (c >= '0' && c <= '9')
-      return c - '0' + 52;
-    if (c == '-')
-      return 62;
-    if (c == '_')
-      return 63;
-    return -1;
-  };
-  std::vector<uint8_t> out;
-  int buf = 0;
-  int bits = 0;
-  for (char c : in)
-  {
-    const int v = sextet(c);
-    if (v < 0)
-      continue;
-    buf = (buf << 6) | v;
-    bits += 6;
-    if (bits >= 8)
-    {
-      bits -= 8;
-      out.push_back(static_cast<uint8_t>((buf >> bits) & 0xFF));
-    }
-  }
+  std::string b64 = in;
+  std::replace(b64.begin(), b64.end(), '-', '+');
+  std::replace(b64.begin(), b64.end(), '_', '/');
+  const size_t pad = (4 - (b64.size() % 4)) % 4;
+  b64.append(pad, '=');
+
+  std::vector<uint8_t> out((b64.size() / 4) * 3);
+  const int decoded_len = EVP_DecodeBlock(out.data(),
+    reinterpret_cast<const unsigned char*>(b64.data()),
+    static_cast<int>(b64.size()));
+  if (decoded_len < 0)
+    return {};
+
+  size_t out_len = static_cast<size_t>(decoded_len);
+  if (pad <= out_len)
+    out_len -= pad;
+  out.resize(out_len);
   return out;
 }
 
