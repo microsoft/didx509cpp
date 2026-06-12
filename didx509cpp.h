@@ -632,17 +632,26 @@ namespace didx509
           // encodings (PrintableString, UTF8String, BMPString, ...) into UTF-8
           // and, unlike ASN1_STRING_print, does not lossily replace non-ASCII
           // or non-printable bytes with '.'.
-          unsigned char* utf8 = nullptr;
-          const int utf8_len = ASN1_STRING_to_UTF8(&utf8, val_asn1);
-          if (utf8_len < 0)
-          {
-            throw std::runtime_error(
-              "could not convert subject attribute value to UTF-8");
-          }
-          std::string value(
-            reinterpret_cast<const char*>(utf8),
-            static_cast<size_t>(utf8_len));
-          OPENSSL_free(utf8);
+unsigned char* utf8_raw = nullptr;
+const int utf8_len = ASN1_STRING_to_UTF8(&utf8_raw, val_asn1);
+if (utf8_len < 0)
+{
+  throw std::runtime_error(
+    "could not convert subject attribute value to UTF-8");
+}
+std::unique_ptr<unsigned char, decltype(&OPENSSL_free)> utf8(
+  utf8_raw, OPENSSL_free);
+
+std::string value;
+if (utf8_len > 0)
+{
+  if (!utf8)
+  {
+    throw std::runtime_error(
+      "could not convert subject attribute value to UTF-8");
+  }
+  value.assign(utf8.get(), utf8.get() + utf8_len);
+}
 
           r[key].push_back(std::move(value));
         }
