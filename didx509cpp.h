@@ -289,7 +289,7 @@ namespace didx509
         {
           return {};
         }
-        return {reinterpret_cast<const char*>(data), static_cast<size_t>(len)};
+        return std::string(data, data + static_cast<size_t>(len));
       }
     };
 
@@ -632,26 +632,27 @@ namespace didx509
           // encodings (PrintableString, UTF8String, BMPString, ...) into UTF-8
           // and, unlike ASN1_STRING_print, does not lossily replace non-ASCII
           // or non-printable bytes with '.'.
-unsigned char* utf8_raw = nullptr;
-const int utf8_len = ASN1_STRING_to_UTF8(&utf8_raw, val_asn1);
-if (utf8_len < 0)
-{
-  throw std::runtime_error(
-    "could not convert subject attribute value to UTF-8");
-}
-std::unique_ptr<unsigned char, decltype(&OPENSSL_free)> utf8(
-  utf8_raw, OPENSSL_free);
+          unsigned char* utf8_raw = nullptr;
+          const int utf8_len = ASN1_STRING_to_UTF8(&utf8_raw, val_asn1);
+          if (utf8_len < 0)
+          {
+            throw std::runtime_error(
+              "could not convert subject attribute value to UTF-8");
+          }
+          const auto utf8_deleter = [](unsigned char* p) { OPENSSL_free(p); };
+          std::unique_ptr<unsigned char, decltype(utf8_deleter)> utf8(
+            utf8_raw, utf8_deleter);
 
-std::string value;
-if (utf8_len > 0)
-{
-  if (!utf8)
-  {
-    throw std::runtime_error(
-      "could not convert subject attribute value to UTF-8");
-  }
-  value.assign(utf8.get(), utf8.get() + utf8_len);
-}
+          std::string value;
+          if (utf8_len > 0)
+          {
+            if (!utf8)
+            {
+              throw std::runtime_error(
+                "could not convert subject attribute value to UTF-8");
+            }
+            value.assign(utf8.get(), utf8.get() + utf8_len);
+          }
 
           r[key].push_back(std::move(value));
         }
