@@ -1131,37 +1131,6 @@ namespace didx509
         return (*this).at(size() - 1);
       }
 
-      [[nodiscard]] std::pair<struct tm, struct tm> get_validity_range() const
-      {
-        if (size() == 0)
-        {
-          throw std::runtime_error(
-            "no certificate change to compute validity ranges for");
-        }
-
-        const ASN1_TIME *latest_from = nullptr;
-        const ASN1_TIME *earliest_to = nullptr;
-        for (size_t i = 0; i < size(); i++)
-        {
-          const auto& c = at(i);
-          const ASN1_TIME* not_before = X509_get0_notBefore(c);
-          if (latest_from == nullptr || ASN1_TIME_compare(latest_from, not_before) == -1)
-          {
-            latest_from = not_before;
-          }
-          const ASN1_TIME* not_after = X509_get0_notAfter(c);
-          if (earliest_to == nullptr || ASN1_TIME_compare(earliest_to, not_after) == 1)
-          {
-            earliest_to = not_after;
-          }
-        }
-
-        std::pair<struct tm, struct tm> r;
-        ASN1_TIME_to_tm(latest_from, &r.first);
-        ASN1_TIME_to_tm(earliest_to, &r.second);
-        return r;
-      }
-
       [[nodiscard]] UqSTACK_OF_X509 verify(
         const std::vector<UqX509>& roots,
         bool ignore_time = false,
@@ -1270,8 +1239,6 @@ namespace didx509
       const std::string& fingerprint_alg,
       const std::string& fingerprint)
     {
-      const std::unordered_set<std::string> valid_fingerprints;
-
       for (size_t i = 1; i < chain.size(); i++)
       {
         const auto& cert = chain.at(i).der();
