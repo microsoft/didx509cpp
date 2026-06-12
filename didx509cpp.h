@@ -929,7 +929,31 @@ namespace didx509
       {
         UqX509_NAME_ENTRY entry(subject_name, cn_i);
         ASN1_STRING* entry_string = X509_NAME_ENTRY_get_data(entry);
-        const std::string common_name = (char*)ASN1_STRING_get0_data(entry_string);
+        CHECKNULL(entry_string);
+        // Decode to UTF-8 and compare using the explicit length, rather than
+        // treating the value as a NUL-terminated C string. An embedded NUL
+        // byte must not truncate the value (which could otherwise be used to
+        // spoof a prefix of the expected name), and non-ASCII values must not
+        // be rendered lossily. This mirrors subject().
+        unsigned char* utf8_raw = nullptr;
+        const int utf8_len = ASN1_STRING_to_UTF8(&utf8_raw, entry_string);
+        if (utf8_len < 0)
+        {
+          throw std::runtime_error("could not convert common name to UTF-8");
+        }
+        const auto utf8_deleter = [](unsigned char* p) { OPENSSL_free(p); };
+        const std::unique_ptr<unsigned char, decltype(utf8_deleter)> utf8(
+          utf8_raw, utf8_deleter);
+
+        std::string common_name;
+        if (utf8_len > 0)
+        {
+          if (!utf8)
+          {
+            throw std::runtime_error("could not convert common name to UTF-8");
+          }
+          common_name.assign(utf8.get(), utf8.get() + utf8_len);
+        }
         if (common_name == expected_name)
         {
           return true;
