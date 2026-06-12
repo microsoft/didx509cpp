@@ -693,49 +693,84 @@ if (utf8_len > 0)
         return {c.get()};
       }
 
-      bool has_san(const std::string& san_type, const std::string& value)
+      [[nodiscard]] bool has_san(
+        const std::string& san_type, const std::string& value) const
       {
+        // The did:x509 spec requires the [san_type, san_value] pair to be one
+        // of the items in chain[0].extensions.san, i.e. an exact, literal match
+        // against a SAN entry of the corresponding type. We therefore compare
+        // directly against the SAN extension values and deliberately do NOT use
+        // X509_check_host / X509_check_email, which additionally perform
+        // wildcard matching and fall back to the subject DN (CN / emailAddress)
+        // when no SAN of the requested type is present.
+        int target_type = 0;
         if (san_type == "dns")
         {
-          if (X509_check_host(*this, value.c_str(), value.size(), 0, nullptr) == 1)
-          {
-            return true;
-          }
+          target_type = GEN_DNS;
         }
         else if (san_type == "email")
         {
-          if (X509_check_email(*this, value.c_str(), value.size(), 0) == 1)
-          {
-            return true;
-          }
+          target_type = GEN_EMAIL;
         }
         else if (san_type == "uri")
         {
-          auto san_exts = subject_alternative_name();
-          for (const auto& ext : san_exts)
-          {
-            for (size_t i = 0; i < ext.size(); i++)
-            {
-              const auto& san_i = ext.at(i);
-              switch (san_i->type)
-              {
-                case GEN_URI: {
-                  ASN1_STRING* x = san_i->d.uniformResourceIdentifier;
-                  const std::string gen_uri = (const char*)ASN1_STRING_get0_data(x);
-                  if (gen_uri == value)
-                  {
-                    return true;
-                  }
-                }
-                default:;
-              }
-            }
-          }
+          target_type = GEN_URI;
         }
         else
         {
           throw std::runtime_error(
             std::string("unknown SAN type: ") + san_type);
+        }
+
+        auto san_exts = subject_alternative_name();
+        for (const auto& ext : san_exts)
+        {
+          for (size_t i = 0; i < ext.size(); i++)
+          {
+            const auto& san_i = ext.at(i);
+            if (san_i->type != target_type)
+            {
+              continue;
+            }
+
+            // All three supported SAN types (dNSName, rfc822Name,
+            // uniformResourceIdentifier) are stored as IA5Strings.
+            const ASN1_IA5STRING* ia5 = nullptr;
+            switch (target_type)
+            {
+              case GEN_DNS:
+                ia5 = san_i->d.dNSName;
+                break;
+              case GEN_EMAIL:
+                ia5 = san_i->d.rfc822Name;
+                break;
+              case GEN_URI:
+                ia5 = san_i->d.uniformResourceIdentifier;
+                break;
+              default:
+                break;
+            }
+            if (ia5 == nullptr)
+            {
+              continue;
+            }
+
+            // Compare using the explicit length so that an embedded NUL byte
+            // does not truncate the value (which could otherwise be used to
+            // spoof a prefix of a pinned value).
+            const int len = ASN1_STRING_length(ia5);
+            const unsigned char* data = ASN1_STRING_get0_data(ia5);
+            if (data == nullptr || len < 0)
+            {
+              continue;
+            }
+            const std::string san_value(
+              reinterpret_cast<const char*>(data), static_cast<size_t>(len));
+            if (san_value == value)
+            {
+              return true;
+            }
+          }
         }
 
         return false;
