@@ -14,6 +14,7 @@
 #include <openssl/asn1.h>
 #include <openssl/bio.h>
 #include <openssl/bn.h>
+#include <openssl/crypto.h>
 #include <openssl/err.h>
 #include <openssl/evp.h>
 #include <openssl/obj_mac.h>
@@ -278,9 +279,17 @@ namespace didx509
 
       operator std::string() const
       {
-        UqBIO bio;
-        ASN1_STRING_print(bio, *this);
-        return bio.to_string();
+        // Return the raw value bytes verbatim, using the explicit length.
+        // Unlike ASN1_STRING_print, this preserves embedded NUL bytes and does
+        // not lossily replace non-printable bytes with '.', which matters when
+        // the value is compared for equality (e.g. the fulcio-issuer policy).
+        const int len = ASN1_STRING_length(*this);
+        const unsigned char* data = ASN1_STRING_get0_data(*this);
+        if (data == nullptr || len < 0)
+        {
+          return {};
+        }
+        return {data, data + static_cast<size_t>(len)};
       }
     };
 
@@ -618,11 +627,34 @@ namespace didx509
 
           ASN1_STRING* val_asn1 = X509_NAME_ENTRY_get_data(entry);
           CHECKNULL(val_asn1);
-          UqBIO value_bio;
-          ASN1_STRING_print(value_bio, val_asn1);
-          auto value = value_bio.to_string();
+          // The did:x509 spec requires subject attribute values to be compared
+          // as UTF-8. ASN1_STRING_to_UTF8 decodes the various X.509 string
+          // encodings (PrintableString, UTF8String, BMPString, ...) into UTF-8
+          // and, unlike ASN1_STRING_print, does not lossily replace non-ASCII
+          // or non-printable bytes with '.'.
+          unsigned char* utf8_raw = nullptr;
+          const int utf8_len = ASN1_STRING_to_UTF8(&utf8_raw, val_asn1);
+          if (utf8_len < 0)
+          {
+            throw std::runtime_error(
+              "could not convert subject attribute value to UTF-8");
+          }
+          const auto utf8_deleter = [](unsigned char* p) { OPENSSL_free(p); };
+          const std::unique_ptr<unsigned char, decltype(utf8_deleter)> utf8(
+            utf8_raw, utf8_deleter);
 
-          r[key].push_back(value);
+          std::string value;
+          if (utf8_len > 0)
+          {
+            if (!utf8)
+            {
+              throw std::runtime_error(
+                "could not convert subject attribute value to UTF-8");
+            }
+            value.assign(utf8.get(), utf8.get() + utf8_len);
+          }
+
+          r[key].push_back(std::move(value));
         }
 
         return r;
@@ -733,8 +765,8 @@ namespace didx509
             {
               continue;
             }
-            const std::string san_value(
-              reinterpret_cast<const char*>(data), static_cast<size_t>(len));
+            const std::string san_value{
+              data, data + static_cast<size_t>(len)};
             if (san_value == value)
             {
               return true;
@@ -1433,7 +1465,11 @@ namespace didx509
             bool found = false;
             for (const auto& fv : sit->second)
             {
-              if (fv.find(v) != std::string::npos)
+              // The did:x509 spec defines subject matching via object.subset,
+              // i.e. exact equality of the attribute value. A substring match
+              // would incorrectly let e.g. "CN:Microsoft" match a certificate
+              // whose CN is "Microsoft Corporation".
+              if (fv == v)
               {
                 found = true;
                 break;

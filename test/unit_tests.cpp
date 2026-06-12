@@ -260,6 +260,61 @@ TEST_CASE("TestSubjectDuplicateField")
   test_resolve_error(chain, did, "duplicate field");
 }
 
+TEST_CASE("TestSubjectExactMatchRequired")
+{
+  // The subject policy must match attribute values exactly (the spec defines
+  // matching via object.subset, i.e. equality), never as a substring. The
+  // leaf certificate's CN and O are both "Microsoft Corporation"; no proper
+  // substring, prefix or suffix of those values may satisfy the policy.
+  auto chain = load_certificate_chain("ms-code-signing.pem");
+  const std::string base =
+    "did:x509:0:sha256:hH32p4SXlD8n_HLrk_mmNzIKArVh0KkbCeh6eAftfGE";
+
+  // Prefix substring of CN.
+  test_resolve_error(
+    chain, base + "::subject:CN:Microsoft", "invalid subject key/value");
+  // Single-character substring of CN.
+  test_resolve_error(
+    chain, base + "::subject:CN:M", "invalid subject key/value");
+  // Suffix substring of CN.
+  test_resolve_error(
+    chain, base + "::subject:CN:Corporation", "invalid subject key/value");
+  // Interior substring of CN (with the space percent-encoded).
+  test_resolve_error(
+    chain, base + "::subject:CN:soft%20Corp", "invalid subject key/value");
+  // Substring of the O attribute.
+  test_resolve_error(
+    chain, base + "::subject:O:Micro", "invalid subject key/value");
+
+  // The exact, complete value still resolves.
+  test_resolve_success(
+    chain, base + "::subject:CN:Microsoft%20Corporation");
+}
+
+TEST_CASE("TestSubjectUtf8Value")
+{
+  // The leaf certificate in this chain has a non-ASCII subject value,
+  // O="café Ltd", encoded as a UTF8String. The value must be decoded as
+  // UTF-8 and compared exactly. Before the UTF-8 fix the value was rendered
+  // lossily (the multi-byte "é" became "..") so the exact match below would
+  // have been (incorrectly) rejected.
+  auto chain = load_certificate_chain("utf8-subject.pem");
+  const std::string base =
+    "did:x509:0:sha256:gq-05smrC6JilYZzYHrr7SOs3V_y_I4K6JMW3arCL2I";
+
+  // Exact UTF-8 value (percent-encoded "café Ltd") resolves.
+  test_resolve_success(chain, base + "::subject:O:caf%C3%A9%20Ltd");
+
+  // A multi-byte-aware prefix substring of the value must be rejected, which
+  // also confirms exact matching works correctly for non-ASCII values.
+  test_resolve_error(
+    chain, base + "::subject:O:caf%C3%A9", "invalid subject key/value");
+
+  // The ASCII CN matches exactly.
+  test_resolve_success(
+    chain, base + "::subject:CN:didx509cpp%20UTF8%20Test%20Leaf");
+}
+
 TEST_CASE("TestDIDParserErrors")
 {
   auto chain = load_certificate_chain("ms-code-signing.pem");
