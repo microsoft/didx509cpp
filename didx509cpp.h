@@ -672,8 +672,14 @@ namespace didx509
         {
           throw std::runtime_error(
             "certificate does not contain a subject key id");
-          }
-        const std::unique_ptr<char, decltype(&free)> c(i2s_ASN1_OCTET_STRING(nullptr, key_id), free);
+        }
+        // i2s_ASN1_OCTET_STRING allocates with OPENSSL_malloc, so the result
+        // must be released with OPENSSL_free (not the CRT free, which can
+        // corrupt the heap when OpenSSL uses a different allocator).
+        const auto deleter = [](char* p) { OPENSSL_free(p); };
+        const std::unique_ptr<char, decltype(deleter)> c(
+          i2s_ASN1_OCTET_STRING(nullptr, key_id), deleter);
+        CHECKNULL(c.get());
         return {c.get()};
       }
 
@@ -690,7 +696,13 @@ namespace didx509
           throw std::runtime_error(
             "certificate does not contain an authority key id");
         }
-        const std::unique_ptr<char, decltype(&free)> c(i2s_ASN1_OCTET_STRING(nullptr, key_id), free);
+        // i2s_ASN1_OCTET_STRING allocates with OPENSSL_malloc, so the result
+        // must be released with OPENSSL_free (not the CRT free, which can
+        // corrupt the heap when OpenSSL uses a different allocator).
+        const auto deleter = [](char* p) { OPENSSL_free(p); };
+        const std::unique_ptr<char, decltype(deleter)> c(
+          i2s_ASN1_OCTET_STRING(nullptr, key_id), deleter);
+        CHECKNULL(c.get());
         return {c.get()};
       }
 
