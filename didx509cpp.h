@@ -824,10 +824,11 @@ namespace didx509
             // Field-element size in octets for the selected curve (RFC 7518).
             int coord_size = 0;
 #if defined(OPENSSL_VERSION_MAJOR) && OPENSSL_VERSION_MAJOR >= 3
-            BIGNUM *x = nullptr;
-            BIGNUM *y = nullptr;
-            EVP_PKEY_get_bn_param(pk, OSSL_PKEY_PARAM_EC_PUB_X, &x);
-            EVP_PKEY_get_bn_param(pk, OSSL_PKEY_PARAM_EC_PUB_Y, &y);
+            // RAII-owned so the coordinates are freed on every exit path,
+            // including the throws below. get_bn_param also checks the result,
+            // which the raw EVP_PKEY_get_bn_param calls here did not.
+            UqBIGNUM x = pk.get_bn_param(OSSL_PKEY_PARAM_EC_PUB_X);
+            UqBIGNUM y = pk.get_bn_param(OSSL_PKEY_PARAM_EC_PUB_Y);
             size_t gname_len = 0;
             CHECK1(EVP_PKEY_get_group_name(pk, nullptr, 0, &gname_len));
             std::string gname(gname_len + 1, 0);
@@ -858,7 +859,10 @@ namespace didx509
             const EC_GROUP* grp = EC_KEY_get0_group(ec_key);
             int curve_nid = EC_GROUP_get_curve_name(grp);
             const EC_POINT* pnt = EC_KEY_get0_public_key(ec_key);
-            BIGNUM *x = BN_new(), *y = BN_new();
+            // RAII-owned so the coordinates are freed on every exit path,
+            // including the throws below.
+            UqBIGNUM x;
+            UqBIGNUM y;
             CHECK1(EC_POINT_get_affine_coordinates(grp, pnt, x, y, nullptr));
             if (curve_nid == NID_X9_62_prime256v1)
             {
@@ -898,8 +902,6 @@ namespace didx509
             }
             r += R"("x":")" + to_base64url(xv) + R"(",)";
             r += R"("y":")" + to_base64url(yv) + R"(")";
-            BN_free(x);
-            BN_free(y);
             break;
           }
           default:
