@@ -37,6 +37,7 @@ Checks: >
   -cppcoreguidelines-pro-bounds-pointer-arithmetic,
   -cppcoreguidelines-pro-type-union-access
 
+
 WarningsAsErrors: '*'
 HeaderFilterRegex: '.*didx509cpp\.h'
 FormatStyle:     'file'

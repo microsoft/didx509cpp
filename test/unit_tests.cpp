@@ -262,6 +262,61 @@ TEST_CASE("TestSubjectDuplicateField")
   test_resolve_error(chain, did, "duplicate field");
 }
 
+TEST_CASE("TestSubjectExactMatchRequired")
+{
+  // The subject policy must match attribute values exactly (the spec defines
+  // matching via object.subset, i.e. equality), never as a substring. The
+  // leaf certificate's CN and O are both "Microsoft Corporation"; no proper
+  // substring, prefix or suffix of those values may satisfy the policy.
+  auto chain = load_certificate_chain("ms-code-signing.pem");
+  const std::string base =
+    "did:x509:0:sha256:hH32p4SXlD8n_HLrk_mmNzIKArVh0KkbCeh6eAftfGE";
+
+  // Prefix substring of CN.
+  test_resolve_error(
+    chain, base + "::subject:CN:Microsoft", "invalid subject key/value");
+  // Single-character substring of CN.
+  test_resolve_error(
+    chain, base + "::subject:CN:M", "invalid subject key/value");
+  // Suffix substring of CN.
+  test_resolve_error(
+    chain, base + "::subject:CN:Corporation", "invalid subject key/value");
+  // Interior substring of CN (with the space percent-encoded).
+  test_resolve_error(
+    chain, base + "::subject:CN:soft%20Corp", "invalid subject key/value");
+  // Substring of the O attribute.
+  test_resolve_error(
+    chain, base + "::subject:O:Micro", "invalid subject key/value");
+
+  // The exact, complete value still resolves.
+  test_resolve_success(
+    chain, base + "::subject:CN:Microsoft%20Corporation");
+}
+
+TEST_CASE("TestSubjectUtf8Value")
+{
+  // The leaf certificate in this chain has a non-ASCII subject value,
+  // O="café Ltd", encoded as a UTF8String. The value must be decoded as
+  // UTF-8 and compared exactly. Before the UTF-8 fix the value was rendered
+  // lossily (the multi-byte "é" became "..") so the exact match below would
+  // have been (incorrectly) rejected.
+  auto chain = load_certificate_chain("utf8-subject.pem");
+  const std::string base =
+    "did:x509:0:sha256:gq-05smrC6JilYZzYHrr7SOs3V_y_I4K6JMW3arCL2I";
+
+  // Exact UTF-8 value (percent-encoded "café Ltd") resolves.
+  test_resolve_success(chain, base + "::subject:O:caf%C3%A9%20Ltd");
+
+  // A multi-byte-aware prefix substring of the value must be rejected, which
+  // also confirms exact matching works correctly for non-ASCII values.
+  test_resolve_error(
+    chain, base + "::subject:O:caf%C3%A9", "invalid subject key/value");
+
+  // The ASCII CN matches exactly.
+  test_resolve_success(
+    chain, base + "::subject:CN:didx509cpp%20UTF8%20Test%20Leaf");
+}
+
 TEST_CASE("TestDIDParserErrors")
 {
   auto chain = load_certificate_chain("ms-code-signing.pem");
@@ -356,6 +411,69 @@ TEST_CASE("TestSANUnknownType")
     "did:x509:0:sha256:T1HzOxsDN5SKU6VYKcUFzNVlWiLdxbJ4H7w5WuYcUkM"
     "::san:other:value";
   test_resolve_error(chain, did, "unknown SAN type");
+}
+
+TEST_CASE("TestSANDnsWildcardNotExpanded")
+{
+  // The san policy must match SAN entries literally. A wildcard dNSName in the
+  // certificate must not be expanded to match a specific host (X509_check_host
+  // would otherwise match "evil.example.com" against a "*.example.com" SAN).
+  auto chain = load_certificate_chain("wildcard-dns-san.pem");
+  const std::string base =
+    "did:x509:0:sha256:oytZAcT4RmC4rlV3x0AUg--_inU_2btxHHVxVbDDcG8";
+
+  // A specific host must not match the wildcard SAN.
+  test_resolve_error(
+    chain, base + "::san:dns:evil.example.com", "SAN not found");
+
+  // The literal wildcard value (percent-encoded '*') matches exactly.
+  test_resolve_success(chain, base + "::san:dns:%2A.example.com");
+}
+
+TEST_CASE("TestSANUriEmbeddedNulNotTruncated")
+{
+  // The leaf has a uniformResourceIdentifier SAN whose value contains an
+  // embedded NUL byte: "https://trusted.example\0.attacker.test". The value
+  // must be compared using its explicit length so that the NUL cannot be used
+  // to spoof a prefix of a pinned value.
+  auto chain = load_certificate_chain("uri-san-embedded-nul.pem");
+  const std::string base =
+    "did:x509:0:sha256:oytZAcT4RmC4rlV3x0AUg--_inU_2btxHHVxVbDDcG8";
+
+  // The prefix before the NUL must not match (no truncation at the NUL).
+  test_resolve_error(
+    chain,
+    base + "::san:uri:https%3A%2F%2Ftrusted.example",
+    "SAN not found");
+
+  // The full value, including the percent-encoded NUL, matches exactly.
+  test_resolve_success(
+    chain,
+    base +
+      "::san:uri:https%3A%2F%2Ftrusted.example%00.attacker.test");
+}
+
+TEST_CASE("TestSANNoSubjectFallback")
+{
+  // The leaf has only a URI SAN, but its subject CN is a hostname and its
+  // subject contains an emailAddress attribute. X509_check_host /
+  // X509_check_email would fall back to those subject fields when no SAN of
+  // the matching type exists; the san policy must only consider SAN entries.
+  auto chain = load_certificate_chain("san-subject-fallback.pem");
+  const std::string base =
+    "did:x509:0:sha256:oytZAcT4RmC4rlV3x0AUg--_inU_2btxHHVxVbDDcG8";
+
+  // CN is "fallback.example.com" but there is no dNSName SAN.
+  test_resolve_error(
+    chain, base + "::san:dns:fallback.example.com", "SAN not found");
+
+  // The subject has emailAddress="fallback@example.com" but no rfc822Name SAN.
+  test_resolve_error(
+    chain, base + "::san:email:fallback%40example.com", "SAN not found");
+
+  // The actual URI SAN still matches (positive control).
+  test_resolve_success(
+    chain, base + "::san:uri:https%3A%2F%2Fexample.com%2Fanchor");
 }
 
 TEST_CASE("TestBadEKU")
