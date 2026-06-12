@@ -1120,7 +1120,7 @@ namespace didx509
 
         for (const auto& c : roots)
         {
-          CHECK1(X509_STORE_add_cert(store, back()));
+          CHECK1(X509_STORE_add_cert(store, c));
         }
 
         auto target = at(0);
