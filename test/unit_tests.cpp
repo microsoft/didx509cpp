@@ -5,6 +5,7 @@
 
 #include <openssl/evp.h>
 
+#include <algorithm>
 #include <string>
 
 #define DOCTEST_CONFIG_IMPLEMENT
