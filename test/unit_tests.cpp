@@ -356,6 +356,69 @@ TEST_CASE("TestSANUnknownType")
   test_resolve_error(chain, did, "unknown SAN type");
 }
 
+TEST_CASE("TestSANDnsWildcardNotExpanded")
+{
+  // The san policy must match SAN entries literally. A wildcard dNSName in the
+  // certificate must not be expanded to match a specific host (X509_check_host
+  // would otherwise match "evil.example.com" against a "*.example.com" SAN).
+  auto chain = load_certificate_chain("wildcard-dns-san.pem");
+  const std::string base =
+    "did:x509:0:sha256:oytZAcT4RmC4rlV3x0AUg--_inU_2btxHHVxVbDDcG8";
+
+  // A specific host must not match the wildcard SAN.
+  test_resolve_error(
+    chain, base + "::san:dns:evil.example.com", "SAN not found");
+
+  // The literal wildcard value (percent-encoded '*') matches exactly.
+  test_resolve_success(chain, base + "::san:dns:%2A.example.com");
+}
+
+TEST_CASE("TestSANUriEmbeddedNulNotTruncated")
+{
+  // The leaf has a uniformResourceIdentifier SAN whose value contains an
+  // embedded NUL byte: "https://trusted.example\0.attacker.test". The value
+  // must be compared using its explicit length so that the NUL cannot be used
+  // to spoof a prefix of a pinned value.
+  auto chain = load_certificate_chain("uri-san-embedded-nul.pem");
+  const std::string base =
+    "did:x509:0:sha256:oytZAcT4RmC4rlV3x0AUg--_inU_2btxHHVxVbDDcG8";
+
+  // The prefix before the NUL must not match (no truncation at the NUL).
+  test_resolve_error(
+    chain,
+    base + "::san:uri:https%3A%2F%2Ftrusted.example",
+    "SAN not found");
+
+  // The full value, including the percent-encoded NUL, matches exactly.
+  test_resolve_success(
+    chain,
+    base +
+      "::san:uri:https%3A%2F%2Ftrusted.example%00.attacker.test");
+}
+
+TEST_CASE("TestSANNoSubjectFallback")
+{
+  // The leaf has only a URI SAN, but its subject CN is a hostname and its
+  // subject contains an emailAddress attribute. X509_check_host /
+  // X509_check_email would fall back to those subject fields when no SAN of
+  // the matching type exists; the san policy must only consider SAN entries.
+  auto chain = load_certificate_chain("san-subject-fallback.pem");
+  const std::string base =
+    "did:x509:0:sha256:oytZAcT4RmC4rlV3x0AUg--_inU_2btxHHVxVbDDcG8";
+
+  // CN is "fallback.example.com" but there is no dNSName SAN.
+  test_resolve_error(
+    chain, base + "::san:dns:fallback.example.com", "SAN not found");
+
+  // The subject has emailAddress="fallback@example.com" but no rfc822Name SAN.
+  test_resolve_error(
+    chain, base + "::san:email:fallback%40example.com", "SAN not found");
+
+  // The actual URI SAN still matches (positive control).
+  test_resolve_success(
+    chain, base + "::san:uri:https%3A%2F%2Fexample.com%2Fanchor");
+}
+
 TEST_CASE("TestBadEKU")
 {
   auto chain = load_certificate_chain("ms-code-signing.pem");
