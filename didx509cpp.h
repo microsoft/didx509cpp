@@ -462,10 +462,6 @@ namespace didx509
         return !(*this == other);
       }
 
-      [[nodiscard]] bool verify_signature(
-        const std::vector<uint8_t>& message,
-        const std::vector<uint8_t>& signature) const;
-
 #if defined(OPENSSL_VERSION_MAJOR) && OPENSSL_VERSION_MAJOR >= 3
       UqBIGNUM get_bn_param(const char* key_name) const
       {
@@ -1219,7 +1215,6 @@ namespace didx509
           throw std::runtime_error(
             std::string("certificate chain verification failed: ") + err_str +
             " (depth: " + std::to_string(depth) + ")");
-          throw std::runtime_error("no chain or signature invalid");
         }
 
         auto msg = std::string(ERR_error_string(ERR_get_error(), nullptr));
