@@ -621,8 +621,17 @@ namespace didx509
           else
           {
             const int sz = OBJ_obj2txt(nullptr, 0, oid, 1);
-            key.resize(sz + 1, 0);
-            OBJ_obj2txt((char*)key.data(), key.size(), oid, 1);
+            if (sz < 0)
+            {
+              throw std::runtime_error("could not convert OID to a string");
+            }
+            // OBJ_obj2txt writes sz characters plus a NUL terminator, so the
+            // buffer needs room for sz + 1. Shrink back to sz afterwards so the
+            // map key does not carry a trailing NUL, which would otherwise stop
+            // a user-supplied OID key (without the NUL) from ever matching.
+            key.resize(static_cast<size_t>(sz) + 1, 0);
+            OBJ_obj2txt(key.data(), key.size(), oid, 1);
+            key.resize(static_cast<size_t>(sz));
           }
 
           ASN1_STRING* val_asn1 = X509_NAME_ENTRY_get_data(entry);
