@@ -821,6 +821,8 @@ namespace didx509
           case EVP_PKEY_EC: {
             r += R"("kty":"EC",)";
             r += R"("crv":")";
+            // Field-element size in octets for the selected curve (RFC 7518).
+            int coord_size = 0;
 #if defined(OPENSSL_VERSION_MAJOR) && OPENSSL_VERSION_MAJOR >= 3
             BIGNUM *x = nullptr;
             BIGNUM *y = nullptr;
@@ -835,14 +837,17 @@ namespace didx509
             if (gname == SN_X9_62_prime256v1)
             {
               r += "P-256";
+              coord_size = 32;
             }
             else if (gname == SN_secp384r1)
             {
               r += "P-384";
+              coord_size = 48;
             }
             else if (gname == SN_secp521r1)
             {
               r += "P-521";
+              coord_size = 66;
             }
             else
             {
@@ -858,14 +863,17 @@ namespace didx509
             if (curve_nid == NID_X9_62_prime256v1)
             {
               r += "P-256";
+              coord_size = 32;
             }
             else if (curve_nid == NID_secp384r1)
             {
               r += "P-384";
+              coord_size = 48;
             }
             else if (curve_nid == NID_secp521r1)
             {
               r += "P-521";
+              coord_size = 66;
             }
             else
             {
@@ -873,12 +881,21 @@ namespace didx509
             }
 #endif
             r += R"(",)";
-            auto x_len = BN_num_bytes(x);
-            auto y_len = BN_num_bytes(y);
-            std::vector<uint8_t> xv(x_len);
-            std::vector<uint8_t> yv(y_len);
-            BN_bn2bin(x, xv.data());
-            BN_bn2bin(y, yv.data());
+            // RFC 7518 (JWA) section 6.2.1.2/6.2.1.3 requires the "x" and "y"
+            // octet strings to be the full coordinate size for the curve (e.g.
+            // 32 octets for P-256), left-padded with zeros. BN_bn2bin emits the
+            // minimal big-endian integer, dropping leading zero bytes, which
+            // would produce a short, non-conformant encoding.
+            std::vector<uint8_t> xv(coord_size);
+            std::vector<uint8_t> yv(coord_size);
+            if (BN_bn2binpad(x, xv.data(), coord_size) != coord_size)
+            {
+              throw std::runtime_error("EC coordinate encoding failed");
+            }
+            if (BN_bn2binpad(y, yv.data(), coord_size) != coord_size)
+            {
+              throw std::runtime_error("EC coordinate encoding failed");
+            }
             r += R"("x":")" + to_base64url(xv) + R"(",)";
             r += R"("y":")" + to_base64url(yv) + R"(")";
             BN_free(x);
