@@ -886,12 +886,16 @@ namespace didx509
             // 32 octets for P-256), left-padded with zeros. BN_bn2bin emits the
             // minimal big-endian integer, dropping leading zero bytes, which
             // would produce a short, non-conformant encoding.
-std::vector<uint8_t> xv(coord_size);
-std::vector<uint8_t> yv(coord_size);
-if (BN_bn2binpad(x, xv.data(), coord_size) != coord_size)
-  throw std::runtime_error("EC coordinate encoding failed");
-if (BN_bn2binpad(y, yv.data(), coord_size) != coord_size)
-  throw std::runtime_error("EC coordinate encoding failed");
+            std::vector<uint8_t> xv(coord_size);
+            std::vector<uint8_t> yv(coord_size);
+            if (BN_bn2binpad(x, xv.data(), coord_size) != coord_size)
+            {
+              throw std::runtime_error("EC coordinate encoding failed");
+            }
+            if (BN_bn2binpad(y, yv.data(), coord_size) != coord_size)
+            {
+              throw std::runtime_error("EC coordinate encoding failed");
+            }
             r += R"("x":")" + to_base64url(xv) + R"(",)";
             r += R"("y":")" + to_base64url(yv) + R"(")";
             BN_free(x);
