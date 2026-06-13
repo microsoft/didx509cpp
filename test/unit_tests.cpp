@@ -318,6 +318,35 @@ TEST_CASE("TestSubjectUtf8Value")
     chain, base + "::subject:CN:didx509cpp%20UTF8%20Test%20Leaf");
 }
 
+TEST_CASE("TestSubjectCustomOid")
+{
+  // The leaf certificate in this chain has a subject attribute whose OID
+  // (emailAddress, 1.2.840.113549.1.9.1) is not in the short-name map used
+  // by UqX509::subject(). For such OIDs the map key is the dotted-decimal
+  // string produced by OBJ_obj2txt. Before the fix, OBJ_obj2txt also wrote a
+  // trailing NUL into the std::string key, so subject.find() never matched a
+  // user-supplied key without the NUL and the policy always failed.
+  auto chain = load_certificate_chain("custom-oid-subject.pem");
+  const std::string base =
+    "did:x509:0:sha256:GFJJwNzxxVLDaUU8ajRT8r0oMVmt87HaeiXyk-zXqws";
+
+  // Dotted-decimal OID key with the correct value resolves.
+  test_resolve_success(
+    chain,
+    base + "::subject:1.2.840.113549.1.9.1:test%40example.com");
+
+  // Dotted-decimal OID key with a wrong value is rejected.
+  test_resolve_error(
+    chain,
+    base + "::subject:1.2.840.113549.1.9.1:wrong%40example.com",
+    "invalid subject key/value");
+
+  // Standard CN attribute still resolves (positive control).
+  test_resolve_success(
+    chain,
+    base + "::subject:CN:didx509cpp%20Custom%20OID%20Test%20Leaf");
+}
+
 TEST_CASE("TestDIDParserErrors")
 {
   auto chain = load_certificate_chain("ms-code-signing.pem");
