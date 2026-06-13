@@ -630,8 +630,12 @@ namespace didx509
             // map key does not carry a trailing NUL, which would otherwise stop
             // a user-supplied OID key (without the NUL) from ever matching.
             key.resize(static_cast<size_t>(sz) + 1, 0);
-            OBJ_obj2txt(key.data(), key.size(), oid, 1);
-            key.resize(static_cast<size_t>(sz));
+            const int sz2 = OBJ_obj2txt(key.data(), key.size(), oid, 1);
+            if (sz2 < 0 || sz2 > sz)
+            {
+              throw std::runtime_error("could not convert OID to a string");
+            }
+            key.resize(static_cast<size_t>(sz2));
           }
 
           ASN1_STRING* val_asn1 = X509_NAME_ENTRY_get_data(entry);
