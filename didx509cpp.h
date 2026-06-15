@@ -25,7 +25,6 @@
 #include <openssl/x509.h>
 #include <openssl/x509_vfy.h>
 #include <openssl/x509v3.h>
-#include <regex>
 #include <stdexcept>
 #include <string>
 #include <unordered_set>
@@ -97,6 +96,13 @@ namespace didx509
 
     inline std::string to_base64(const std::vector<uint8_t>& bytes)
     {
+      // EVP_EncodeBlock produces nothing for empty input; return early so the
+      // padding-trim loop below does not call back() on an empty string (UB).
+      if (bytes.empty())
+      {
+        return {};
+      }
+
       const int r_sz = 4 * ((bytes.size() + 2) / 3);
       std::string r(r_sz, 0);
       auto out_sz =
@@ -105,7 +111,7 @@ namespace didx509
       {
         throw std::runtime_error("base64 conversion failed");
       }
-      while (r.back() == '=')
+      while (!r.empty() && r.back() == '=')
       {
         r.pop_back();
       }
@@ -461,10 +467,6 @@ namespace didx509
       {
         return !(*this == other);
       }
-
-      [[nodiscard]] bool verify_signature(
-        const std::vector<uint8_t>& message,
-        const std::vector<uint8_t>& signature) const;
 
 #if defined(OPENSSL_VERSION_MAJOR) && OPENSSL_VERSION_MAJOR >= 3
       UqBIGNUM get_bn_param(const char* key_name) const
@@ -932,33 +934,43 @@ namespace didx509
       EVP_PKEY_up_ref((EVP_PKEY*)key);
     }
 
-    struct UqX509_NAME
-      : public UqSSLOBJECT<X509_NAME, X509_NAME_new, X509_NAME_free>
-    {
-      UqX509_NAME(const UqX509& x509) :
-        UqSSLOBJECT(X509_get_subject_name(x509), X509_NAME_free, true)
-      {}
-    };
-
-    struct UqX509_NAME_ENTRY : public UqSSLOBJECT<
-                                 X509_NAME_ENTRY,
-                                 X509_NAME_ENTRY_new,
-                                 X509_NAME_ENTRY_free>
-    {
-      UqX509_NAME_ENTRY(const UqX509_NAME& name, int i) :
-        UqSSLOBJECT(X509_NAME_get_entry(name, i), X509_NAME_ENTRY_free, true)
-      {}
-    };
-
     inline bool UqX509::has_common_name(const std::string& expected_name) const
     {
-      UqX509_NAME subject_name(*this);
+      // X509_get_subject_name and X509_NAME_get_entry return internal pointers
+      // that must NOT be freed; use raw pointers (as subject() does).
+      X509_NAME* subject_name = X509_get_subject_name(*this);
+      CHECKNULL(subject_name);
       int cn_i = X509_NAME_get_index_by_NID(subject_name, NID_commonName, -1);
       while (cn_i != -1)
       {
-        UqX509_NAME_ENTRY entry(subject_name, cn_i);
+        X509_NAME_ENTRY* entry = X509_NAME_get_entry(subject_name, cn_i);
+        CHECKNULL(entry);
         ASN1_STRING* entry_string = X509_NAME_ENTRY_get_data(entry);
-        const std::string common_name = (char*)ASN1_STRING_get0_data(entry_string);
+        CHECKNULL(entry_string);
+        // Decode to UTF-8 and compare using the explicit length, rather than
+        // treating the value as a NUL-terminated C string. An embedded NUL
+        // byte must not truncate the value (which could otherwise be used to
+        // spoof a prefix of the expected name), and non-ASCII values must not
+        // be rendered lossily. This mirrors subject().
+        unsigned char* utf8_raw = nullptr;
+        const int utf8_len = ASN1_STRING_to_UTF8(&utf8_raw, entry_string);
+        if (utf8_len < 0)
+        {
+          throw std::runtime_error("could not convert common name to UTF-8");
+        }
+        const auto utf8_deleter = [](unsigned char* p) { OPENSSL_free(p); };
+        const std::unique_ptr<unsigned char, decltype(utf8_deleter)> utf8(
+          utf8_raw, utf8_deleter);
+
+        std::string common_name;
+        if (utf8_len > 0)
+        {
+          if (!utf8)
+          {
+            throw std::runtime_error("could not convert common name to UTF-8");
+          }
+          common_name.assign(utf8.get(), utf8.get() + utf8_len);
+        }
         if (common_name == expected_name)
         {
           return true;
@@ -1160,37 +1172,6 @@ namespace didx509
         return (*this).at(size() - 1);
       }
 
-      [[nodiscard]] std::pair<struct tm, struct tm> get_validity_range() const
-      {
-        if (size() == 0)
-        {
-          throw std::runtime_error(
-            "no certificate change to compute validity ranges for");
-        }
-
-        const ASN1_TIME *latest_from = nullptr;
-        const ASN1_TIME *earliest_to = nullptr;
-        for (size_t i = 0; i < size(); i++)
-        {
-          const auto& c = at(i);
-          const ASN1_TIME* not_before = X509_get0_notBefore(c);
-          if (latest_from == nullptr || ASN1_TIME_compare(latest_from, not_before) == -1)
-          {
-            latest_from = not_before;
-          }
-          const ASN1_TIME* not_after = X509_get0_notAfter(c);
-          if (earliest_to == nullptr || ASN1_TIME_compare(earliest_to, not_after) == 1)
-          {
-            earliest_to = not_after;
-          }
-        }
-
-        std::pair<struct tm, struct tm> r;
-        ASN1_TIME_to_tm(latest_from, &r.first);
-        ASN1_TIME_to_tm(earliest_to, &r.second);
-        return r;
-      }
-
       [[nodiscard]] UqSTACK_OF_X509 verify(
         const std::vector<UqX509>& roots,
         bool ignore_time = false,
@@ -1262,7 +1243,6 @@ namespace didx509
           throw std::runtime_error(
             std::string("certificate chain verification failed: ") + err_str +
             " (depth: " + std::to_string(depth) + ")");
-          throw std::runtime_error("no chain or signature invalid");
         }
 
         auto msg = std::string(ERR_error_string(ERR_get_error(), nullptr));
@@ -1299,8 +1279,6 @@ namespace didx509
       const std::string& fingerprint_alg,
       const std::string& fingerprint)
     {
-      const std::unordered_set<std::string> valid_fingerprints;
-
       for (size_t i = 1; i < chain.size(); i++)
       {
         const auto& cert = chain.at(i).der();
@@ -1605,44 +1583,95 @@ namespace didx509
       return {include_assertion_method, include_key_agreement};
     }
 
+    // Escape a string so it can be safely embedded inside a JSON string
+    // literal. The did is attacker-influenced input; without escaping, a did
+    // containing '"', '\\' or control characters could break out of the JSON
+    // string and corrupt or inject structure into the resulting document.
+    inline std::string json_escape_string(const std::string& s)
+    {
+      static const char* const hex = "0123456789abcdef";
+      std::string r;
+      r.reserve(s.size() + 2);
+      for (const char ch : s)
+      {
+        const auto c = static_cast<unsigned char>(ch);
+        switch (c)
+        {
+          case '"':
+            r += "\\\"";
+            break;
+          case '\\':
+            r += "\\\\";
+            break;
+          case '\b':
+            r += "\\b";
+            break;
+          case '\f':
+            r += "\\f";
+            break;
+          case '\n':
+            r += "\\n";
+            break;
+          case '\r':
+            r += "\\r";
+            break;
+          case '\t':
+            r += "\\t";
+            break;
+          default:
+            if (c < 0x20)
+            {
+              r += "\\u00";
+              r += hex[(c >> 4) & 0xF];
+              r += hex[c & 0xF];
+            }
+            else
+            {
+              r += static_cast<char>(c);
+            }
+        }
+      }
+      return r;
+    }
+
     inline std::string create_did_document(
       const std::string& did, const UqSTACK_OF_X509& chain)
     {
-      const std::string format = R"({
-    "@context": "https://www.w3.org/ns/did/v1",
-    "id": "_DID_",
-    "verificationMethod": [{
-        "id": "_DID_#key-1",
-        "type": "JsonWebKey2020",
-        "controller": "_DID_",
-        "publicKeyJwk": _LEAF_JWK_
-    }]
-    _ASSERTION_METHOD_
-    _KEY_AGREEMENT_
-})";
-
       const auto& leaf = chain.front();
-      const auto& [include_assertion_method, include_key_agreement] = is_agreed_signature_key(leaf);
+      const auto& [include_assertion_method, include_key_agreement] =
+        is_agreed_signature_key(leaf);
 
-      std::string am;
-      std::string ka;
+      // The did is escaped before being embedded in the JSON document. The
+      // leaf JWK is produced internally from base64url-encoded values and a
+      // fixed set of keys, so it is inserted verbatim as a JSON object.
+      const std::string did_json = json_escape_string(did);
+      const auto& leaf_jwk = leaf.public_jwk();
+
+      std::string r = R"({
+    "@context": "https://www.w3.org/ns/did/v1",
+    "id": ")" + did_json +
+        R"(",
+    "verificationMethod": [{
+        "id": ")" + did_json +
+        R"(#key-1",
+        "type": "JsonWebKey2020",
+        "controller": ")" + did_json +
+        R"(",
+        "publicKeyJwk": )" + leaf_jwk +
+        R"(
+    }])";
+
       if (include_assertion_method)
       {
-        am = R"(,"assertionMethod": ")" + did + R"(#key-1")";
+        r += R"(,"assertionMethod": ")" + did_json + R"(#key-1")";
       }
       if (include_key_agreement)
       {
-        ka = R"(,"keyAgreement": ")" + did + R"(#key-1")";
+        r += R"(,"keyAgreement": ")" + did_json + R"(#key-1")";
       }
 
-      const auto& leaf_jwk = leaf.public_jwk();
-
-      auto t = std::regex_replace(format, std::regex("_DID_"), did);
-      t = std::regex_replace(t, std::regex("_ASSERTION_METHOD_"), am);
-      t = std::regex_replace(t, std::regex("_KEY_AGREEMENT_"), ka);
-      t = std::regex_replace(t, std::regex("_LEAF_JWK_"), leaf_jwk);
-
-      return t;
+      r += "\n}";
+      return r;
     }
   }
 
