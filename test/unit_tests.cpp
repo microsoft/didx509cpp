@@ -679,6 +679,12 @@ TEST_CASE("TestEcJwkCoordinatePadding")
   CHECK(x.front() == 0x00);
 }
 
+TEST_CASE("to_base64 and to_base64url empty input")
+{
+  CHECK(to_base64({}) == "");
+  CHECK(to_base64url({}) == "");
+}
+
 int main(int argc, char** argv)
 {
   doctest::Context ctx;
