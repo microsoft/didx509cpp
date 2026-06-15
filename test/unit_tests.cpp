@@ -57,11 +57,16 @@ void test_resolve_success(const std::string& chain, const std::string& did)
   // Verify that resolved DID document is valid JSON
   nlohmann::json doc;
   REQUIRE_NOTHROW(doc = nlohmann::json::parse(did_doc));
-  CHECK(doc["@context"] == "https://www.w3.org/ns/did/v1");
+  REQUIRE(doc["@context"].is_array());
+  CHECK(
+    doc["@context"] ==
+    nlohmann::json::array(
+      {"https://www.w3.org/ns/did/v1",
+       "https://w3id.org/security/suites/jws-2020/v1"}));
   CHECK(doc["id"] == did);
   REQUIRE(doc["verificationMethod"].is_array());
   REQUIRE(doc["verificationMethod"].size() == 1);
-  CHECK(doc["verificationMethod"][0]["id"] == did + "#key-1");
+  CHECK(doc["verificationMethod"][0]["id"] == did + "#0");
   CHECK(doc["verificationMethod"][0]["type"] == "JsonWebKey2020");
   CHECK(doc["verificationMethod"][0]["controller"] == did);
   CHECK(doc["verificationMethod"][0]["publicKeyJwk"].contains("kty"));
@@ -606,15 +611,15 @@ TEST_CASE("TestDIDDocumentKeyUsageSections")
     "did:x509:0:sha256:hH32p4SXlD8n_HLrk_mmNzIKArVh0KkbCeh6eAftfGE"
     "::subject:CN:Microsoft%20Corporation";
   auto doc = nlohmann::json::parse(resolve(chain, did, true));
-  CHECK(doc["assertionMethod"] == did + "#key-1");
-  CHECK(doc["keyAgreement"] == did + "#key-1");
+  CHECK(doc["assertionMethod"] == nlohmann::json::array({did + "#0"}));
+  CHECK(doc["keyAgreement"] == nlohmann::json::array({did + "#0"}));
 
   chain = load_certificate_chain("dns-san.pem");
   did =
     "did:x509:0:sha256:T1HzOxsDN5SKU6VYKcUFzNVlWiLdxbJ4H7w5WuYcUkM"
     "::san:dns:san-test.example.com";
   doc = nlohmann::json::parse(resolve(chain, did, true));
-  CHECK(doc["assertionMethod"] == did + "#key-1");
+  CHECK(doc["assertionMethod"] == nlohmann::json::array({did + "#0"}));
   CHECK_FALSE(doc.contains("keyAgreement"));
 }
 

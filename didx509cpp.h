@@ -1669,12 +1669,15 @@ namespace didx509
       const auto& leaf_jwk = leaf.public_jwk();
 
       std::string r = R"({
-    "@context": "https://www.w3.org/ns/did/v1",
+    "@context": [
+        "https://www.w3.org/ns/did/v1",
+        "https://w3id.org/security/suites/jws-2020/v1"
+    ],
     "id": ")" + did_json +
         R"(",
     "verificationMethod": [{
         "id": ")" + did_json +
-        R"(#key-1",
+        R"(#0",
         "type": "JsonWebKey2020",
         "controller": ")" + did_json +
         R"(",
@@ -1684,11 +1687,11 @@ namespace didx509
 
       if (include_assertion_method)
       {
-        r += R"(,"assertionMethod": ")" + did_json + R"(#key-1")";
+        r += R"(,"assertionMethod": [")" + did_json + R"(#0"])";
       }
       if (include_key_agreement)
       {
-        r += R"(,"keyAgreement": ")" + did_json + R"(#key-1")";
+        r += R"(,"keyAgreement": [")" + did_json + R"(#0"])";
       }
 
       r += "\n}";
