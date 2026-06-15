@@ -96,6 +96,13 @@ namespace didx509
 
     inline std::string to_base64(const std::vector<uint8_t>& bytes)
     {
+      // EVP_EncodeBlock produces nothing for empty input; return early so the
+      // padding-trim loop below does not call back() on an empty string (UB).
+      if (bytes.empty())
+      {
+        return {};
+      }
+
       const int r_sz = 4 * ((bytes.size() + 2) / 3);
       std::string r(r_sz, 0);
       auto out_sz =
@@ -104,7 +111,7 @@ namespace didx509
       {
         throw std::runtime_error("base64 conversion failed");
       }
-      while (r.back() == '=')
+      while (!r.empty() && r.back() == '=')
       {
         r.pop_back();
       }
