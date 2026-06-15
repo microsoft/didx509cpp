@@ -1196,7 +1196,12 @@ namespace didx509
         UqX509_STORE_CTX store_ctx;
         CHECK1(X509_STORE_CTX_init(store_ctx, store, target, *this));
 
-        X509_VERIFY_PARAM* param = X509_VERIFY_PARAM_new();
+        // Own the param with a unique_ptr so it is freed if any of the calls
+        // below throw, before ownership is transferred to the store context.
+        std::unique_ptr<X509_VERIFY_PARAM, decltype(&X509_VERIFY_PARAM_free)>
+          param_holder(X509_VERIFY_PARAM_new(), X509_VERIFY_PARAM_free);
+        CHECKNULL(param_holder.get());
+        X509_VERIFY_PARAM* param = param_holder.get();
         X509_VERIFY_PARAM_set_depth(param, std::numeric_limits<int>::max());
         // Require at least 112-bit-equivalent security (OpenSSL level 2):
         // RSA/DSA/DH keys >= 2048 bits, ECC keys >= 224 bits, no RC4 or MD5.
@@ -1213,7 +1218,8 @@ namespace didx509
           CHECK1(X509_VERIFY_PARAM_set_flags(param, X509_V_FLAG_NO_CHECK_TIME));
         }
 
-        X509_STORE_CTX_set0_param(store_ctx, param);
+        // set0 takes ownership of param, so release it from the unique_ptr.
+        X509_STORE_CTX_set0_param(store_ctx, param_holder.release());
 
 #if defined(OPENSSL_VERSION_MAJOR) && OPENSSL_VERSION_MAJOR >= 3
         if (no_auth_key_id_ok)
