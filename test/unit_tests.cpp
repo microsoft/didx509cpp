@@ -483,6 +483,40 @@ TEST_CASE("TestSANUriEmbeddedNulNotTruncated")
       "::san:uri:https%3A%2F%2Ftrusted.example%00.attacker.test");
 }
 
+TEST_CASE("TestCNEmbeddedNulNotTruncated")
+{
+  // The certificate has CN = "trusted\x00evil" (embedded NUL).
+  // has_common_name() must compare using the explicit ASN.1 length, not as a
+  // NUL-terminated C string.  A certificate whose CN is "trusted\0evil" must
+  // NOT compare equal to "trusted" (no truncation at the NUL), and MUST
+  // compare equal to the full value including the NUL.
+  UqX509 cert(load_certificate_chain("cn-embedded-nul.pem"));
+
+  // The prefix before the NUL must not match (no truncation at the NUL).
+  CHECK_FALSE(cert.has_common_name("trusted"));
+
+  // The full value, including the embedded NUL, must match exactly.
+  CHECK(cert.has_common_name(std::string("trusted\0evil", 12)));
+
+  // An unrelated value must not match.
+  CHECK_FALSE(cert.has_common_name("evil"));
+}
+
+TEST_CASE("TestCNUtf8Value")
+{
+  // The certificate has CN = "café Test", a non-ASCII UTF-8 value stored as
+  // a UTF8String.  has_common_name() must decode it correctly via
+  // ASN1_STRING_to_UTF8 rather than treating it as raw bytes.
+  UqX509 cert(load_certificate_chain("cn-utf8.pem"));
+
+  // Exact UTF-8 value must match.
+  CHECK(cert.has_common_name("caf\xc3\xa9 Test"));
+
+  // A lossy or partial representation must not match.
+  CHECK_FALSE(cert.has_common_name("caf Test"));
+  CHECK_FALSE(cert.has_common_name("cafe Test"));
+}
+
 TEST_CASE("TestSANNoSubjectFallback")
 {
   // The leaf has only a URI SAN, but its subject CN is a hostname and its
@@ -672,6 +706,12 @@ TEST_CASE("TestEcJwkCoordinatePadding")
   CHECK(y.size() == 32);
   // The fixture's leading zero byte must be preserved by the padding.
   CHECK(x.front() == 0x00);
+}
+
+TEST_CASE("to_base64 and to_base64url empty input")
+{
+  CHECK(to_base64({}) == "");
+  CHECK(to_base64url({}) == "");
 }
 
 int main(int argc, char** argv)
