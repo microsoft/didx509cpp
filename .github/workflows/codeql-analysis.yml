@@ -37,7 +37,9 @@ jobs:
         # queries: ./path/to/local/query, your-org/your-repo/queries@main
 
     - name: Install packages
-      run: sudo apt install doctest-dev libcurl4-openssl-dev libssl-dev
+      run: |
+        sudo apt update
+        sudo apt install doctest-dev libcurl4-openssl-dev libssl-dev
 
     - name: Create Build Environment
       run: cmake -E make_directory ${{github.workspace}}/build/${{ matrix.build_type }}
