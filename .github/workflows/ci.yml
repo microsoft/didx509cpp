@@ -60,6 +60,29 @@ jobs:
         shell: bash
         run: ctest -C ${{ matrix.build_type }} -VV
 
+  clang-tidy:
+    name: Clang-Tidy
+    runs-on: ubuntu-24.04
+
+    steps:
+      - name: Install packages
+        run: |
+          sudo apt update
+          sudo apt install clang-18 clang-tidy-18 libcurl4-openssl-dev libssl-dev
+
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Configure CMake
+        run: |
+          cmake -S . -B build/clang-tidy \
+            -DCMAKE_BUILD_TYPE=Debug \
+            -DCMAKE_CXX_COMPILER=clang++-18 \
+            -DCLANG_TIDY=ON \
+            -DTESTS=OFF
+
+      - name: Run clang-tidy
+        run: cmake --build build/clang-tidy --target clang-tidy
+
   build-test-azure-linux:
     runs-on: ubuntu-latest
     container:
@@ -103,11 +126,6 @@ jobs:
         working-directory: build/${{ matrix.build_type }}
         shell: bash
         run: cmake --build . --config ${{ matrix.build_type }}
-
-      - name: Clang-Tidy
-        working-directory: build/${{ matrix.build_type }}
-        shell: bash
-        run: clang-tidy ../../didx509cpp.h
 
       - name: Test
         working-directory: build/${{ matrix.build_type }}

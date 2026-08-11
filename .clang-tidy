@@ -21,7 +21,6 @@ Checks: >
   -bugprone-easily-swappable-parameters,
   -bugprone-narrowing-conversions,
   -cppcoreguidelines-narrowing-conversions,
-  -readability-function-cognitive-complexity,
   -cppcoreguidelines-pro-bounds-array-to-pointer-decay,
   -cppcoreguidelines-avoid-magic-numbers,
   -readability-magic-numbers,
@@ -37,7 +36,10 @@ Checks: >
   -cppcoreguidelines-pro-bounds-pointer-arithmetic,
   -cppcoreguidelines-pro-type-union-access
 
-
 WarningsAsErrors: '*'
-HeaderFilterRegex: '.*didx509cpp\.h'
+HeaderFilterRegex: '(^|.*/)didx509cpp\.h$'
 FormatStyle:     'file'
+
+CheckOptions:
+  readability-function-cognitive-complexity.IgnoreMacros: true
+  readability-function-cognitive-complexity.Threshold: 100
