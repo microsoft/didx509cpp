@@ -57,28 +57,7 @@ if(TESTS)
     target_link_libraries(${NAME} PRIVATE $<BUILD_INTERFACE:didx509cpp>)
 
     if(CLANG_TIDY)
-      # Establish test coverage without making pre-existing test-only findings
-      # block adoption. Library diagnostics remain governed by .clang-tidy.
-      string(
-        CONCAT
-        TEST_CLANG_TIDY_EXCLUSIONS
-        "-clang-analyzer-cplusplus.NewDeleteLeaks"
-        ",-cppcoreguidelines-avoid-non-const-global-variables"
-        ",-cppcoreguidelines-pro-type-reinterpret-cast"
-        ",-misc-const-correctness"
-        ",-misc-include-cleaner"
-        ",-misc-use-anonymous-namespace"
-        ",-modernize-use-auto"
-        ",-modernize-use-emplace"
-        ",-readability-braces-around-statements"
-        ",-readability-qualified-auto"
-      )
-      set_property(
-        TARGET ${NAME}
-        PROPERTY
-          CXX_CLANG_TIDY
-          "${CLANG_TIDY_EXE};--checks=${TEST_CLANG_TIDY_EXCLUSIONS}"
-      )
+      enable_clang_tidy(${NAME})
       add_dependencies(clang-tidy ${NAME})
     endif()
 

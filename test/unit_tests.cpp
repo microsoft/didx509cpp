@@ -3,33 +3,50 @@
 
 #include "didx509cpp.h"
 
-#include <openssl/evp.h>
-
 #include <algorithm>
+#include <bit>
+#include <cctype>
+#include <cstddef>
+#include <cstdint>
+#include <cstring>
+#include <fstream>
+#include <openssl/evp.h>
+#include <sstream>
+#include <stdexcept>
 #include <string>
+#include <string_view>
+#include <vector>
 
 #define DOCTEST_CONFIG_IMPLEMENT
-#include "doctest.h"
-#include "json.hpp"
+#include <doctest.h>
+#include <json.hpp>
 
 using namespace didx509;
 
-static std::string test_data_dir = "../test/test-data";
-
-static std::string load_certificate_chain(const std::string& path)
+namespace
 {
-  std::ifstream t(test_data_dir + "/" + path);
+std::string& test_data_dir()
+{
+  static std::string path = "../test/test-data";
+  return path;
+}
+
+std::string load_certificate_chain(const std::string& path)
+{
+  std::ifstream const t(test_data_dir() + "/" + path);
   if (!t.good())
+  {
     throw std::runtime_error(std::string("could not open ") + path);
+  }
   std::stringstream ss;
   ss << t.rdbuf();
   return ss.str();
 }
 
-static std::vector<std::string> split_x509_cert_bundle(
+std::vector<std::string> split_x509_cert_bundle(
   const std::string_view& pem)
 {
-  std::string separator("-----END CERTIFICATE-----");
+  std::string const separator("-----END CERTIFICATE-----");
   std::vector<std::string> pems;
   size_t separator_end = 0;
   auto next_separator_start = pem.find(separator);
@@ -41,9 +58,9 @@ static std::vector<std::string> split_x509_cert_bundle(
     {
       ++separator_end;
     }
-    pems.emplace_back(std::string(pem.substr(
+    pems.emplace_back(pem.substr(
       separator_end,
-      (next_separator_start - separator_end) + separator.size())));
+      (next_separator_start - separator_end) + separator.size()));
     separator_end = next_separator_start + separator.size();
     next_separator_start = pem.find(separator, separator_end);
   }
@@ -85,7 +102,8 @@ void test_resolve_error(
   const std::string& did,
   const doctest::String& error_msg)
 {
-  REQUIRE_THROWS_WITH(resolve(chain, did, true), doctest::Contains(error_msg));
+  REQUIRE_THROWS_WITH( // NOLINT(clang-analyzer-cplusplus.NewDeleteLeaks)
+    resolve(chain, did, true), doctest::Contains(error_msg));
 }
 
 void test_resolve_jwk_error(
@@ -93,35 +111,39 @@ void test_resolve_jwk_error(
   const std::string& did,
   const doctest::String& error_msg)
 {
-  REQUIRE_THROWS_WITH(resolve_jwk(chain, did, true), doctest::Contains(error_msg));
+  REQUIRE_THROWS_WITH( // NOLINT(clang-analyzer-cplusplus.NewDeleteLeaks)
+    resolve_jwk(chain, did, true), doctest::Contains(error_msg));
 }
 
+// doctest::String's manual small-string optimization triggers analyzer leak
+// false positives at some assertion sites. Keep suppressions on those exact
+// diagnostics rather than disabling the check for the test target.
 TEST_CASE("Wrong prefix")
 {
   auto chain = load_certificate_chain("ms-code-signing.pem");
-  auto did = "djd:y508:1:abcd::";
+  const auto* did = "djd:y508:1:abcd::";
   test_resolve_error(chain, did, "unsupported method/prefix");
-}
+} // NOLINT(clang-analyzer-cplusplus.NewDeleteLeaks)
 
 TEST_CASE("Empty chain")
 {
-  auto chain = "";
-  auto did = "djd:y508:1:abcd::";
+  const auto* chain = "";
+  const auto* did = "djd:y508:1:abcd::";
   test_resolve_error(chain, did, "no certificate chain");
 }
 
 TEST_CASE("Chain of one not-a-cert-but-a-chain")
 {
   auto chain = load_certificate_chain("ms-code-signing.pem");
-  auto did =
+  const auto* did =
     "did:x509:0:sha256:hH32p4SXlD8n_HLrk_mmNzIKArVh0KkbCeh6eAftfGE"
     "::subject:CN:Microsoft%20Corporation";
   test_resolve_jwk_error({chain}, did, "expected exactly one PEM element");
-}
+} // NOLINT(clang-analyzer-cplusplus.NewDeleteLeaks)
 
 TEST_CASE("Invalid input")
 {
-  auto did =
+  const auto* did =
     "did:x509:0:sha256:hH32p4SXlD8n_HLrk_mmNzIKArVh0KkbCeh6eAftfGE"
     "::subject:CN:Microsoft%20Corporation";
   test_resolve_jwk_error({"-----BEGIN CERTIFICATE-----"}, did, "bad end line");
@@ -131,12 +153,12 @@ TEST_CASE("Invalid input")
   test_resolve_jwk_error(split_chain, did, "bad base64 decode");
   split_chain[0][42] -= 10;
   test_resolve_jwk_error(split_chain, did, "asn1 encoding routines::too long");
-}
+} // NOLINT(clang-analyzer-cplusplus.NewDeleteLeaks)
 
 TEST_CASE("TestRootCA")
 {
   auto chain = load_certificate_chain("ms-code-signing.pem");
-  auto did =
+  const auto* did =
     "did:x509:0:sha256:hH32p4SXlD8n_HLrk_mmNzIKArVh0KkbCeh6eAftfGE"
     "::subject:CN:Microsoft%20Corporation";
   test_resolve_success(chain, did);
@@ -145,7 +167,7 @@ TEST_CASE("TestRootCA")
 TEST_CASE("TestIntermediateCA")
 {
   auto chain = load_certificate_chain("ms-code-signing.pem");
-  auto did =
+  const auto* did =
     "did:x509:0:sha256:VtqHIq_ZQGb_4eRZVHOkhUiSuEOggn1T-32PSu7R4Ys"
     "::subject:CN:Microsoft%20Corporation";
   test_resolve_success(chain, did);
@@ -154,22 +176,23 @@ TEST_CASE("TestIntermediateCA")
 TEST_CASE("TestInvalidLeafCA")
 {
   auto chain = load_certificate_chain("ms-code-signing.pem");
-  auto did = "did:x509:0:sha256:h::subject:CN:Microsoft%20Corporation";
+  const auto* did = "did:x509:0:sha256:h::subject:CN:Microsoft%20Corporation";
   test_resolve_error(chain, did, "invalid certificate fingerprint");
-}
+} // NOLINT(clang-analyzer-cplusplus.NewDeleteLeaks)
 
 TEST_CASE("TestInvalidCA")
 {
   auto chain = load_certificate_chain("ms-code-signing.pem");
-  auto did = "did:x509:0:sha256:abc::CN:Microsoft%20Corporation";
+  const auto* did = "did:x509:0:sha256:abc::CN:Microsoft%20Corporation";
   test_resolve_error(chain, did, "invalid certificate fingerprint");
-}
+} // NOLINT(clang-analyzer-cplusplus.NewDeleteLeaks)
 
 TEST_CASE("TestFingerprintAlgorithms")
 {
   auto chain = load_certificate_chain("ms-code-signing.pem");
-  auto did =
-    "did:x509:0:sha384:tg8BQvQznAnlqwHWedNqMSKxsf-_dDmEB7qsgYP0eamWeA5M5UNdgPQWMtCdWkoz"
+  const auto* did =
+    "did:x509:0:sha384:tg8BQvQznAnlqwHWedNqMSKxsf-_"
+    "dDmEB7qsgYP0eamWeA5M5UNdgPQWMtCdWkoz"
     "::subject:CN:Microsoft%20Corporation";
   test_resolve_success(chain, did);
 
@@ -182,16 +205,16 @@ TEST_CASE("TestFingerprintAlgorithms")
 TEST_CASE("TestUnsupportedFingerprintAlgorithm")
 {
   auto chain = load_certificate_chain("ms-code-signing.pem");
-  auto did =
+  const auto* did =
     "did:x509:0:sha1:hH32p4SXlD8n_HLrk_mmNzIKArVh0KkbCeh6eAftfGE"
     "::subject:CN:Microsoft%20Corporation";
   test_resolve_error(chain, did, "unsupported fingerprint algorithm");
-}
+} // NOLINT(clang-analyzer-cplusplus.NewDeleteLeaks)
 
 TEST_CASE("TestMultiplePolicies")
 {
   auto chain = load_certificate_chain("ms-code-signing.pem");
-  auto did =
+  const auto* did =
     "did:x509:0:sha256:hH32p4SXlD8n_HLrk_mmNzIKArVh0KkbCeh6eAftfGE"
     "::eku:1.3.6.1.5.5.7.3.3"
     "::eku:1.3.6.1.4.1.311.10.3.21";
@@ -201,7 +224,7 @@ TEST_CASE("TestMultiplePolicies")
 TEST_CASE("TestSubject")
 {
   auto chain = load_certificate_chain("ms-code-signing.pem");
-  auto did =
+  const auto* did =
     "did:x509:0:sha256:hH32p4SXlD8n_HLrk_mmNzIKArVh0KkbCeh6eAftfGE"
     "::subject:CN:Microsoft%20Corporation";
   test_resolve_success(chain, did);
@@ -210,7 +233,7 @@ TEST_CASE("TestSubject")
 TEST_CASE("TestSubjectWithStateST")
 {
   auto chain = load_certificate_chain("ms-code-signing.pem");
-  auto did =
+  const auto* did =
     "did:x509:0:sha256:hH32p4SXlD8n_HLrk_mmNzIKArVh0KkbCeh6eAftfGE"
     "::subject:CN:Microsoft%20Corporation:ST:Washington";
   test_resolve_success(chain, did);
@@ -225,7 +248,7 @@ TEST_CASE("TestSubjectWithStateST")
 TEST_CASE("TestSubjectWithStateS")
 {
   auto chain = load_certificate_chain("ms-code-signing.pem");
-  auto did =
+  const auto* did =
     "did:x509:0:sha256:hH32p4SXlD8n_HLrk_mmNzIKArVh0KkbCeh6eAftfGE"
     "::subject:CN:Microsoft%20Corporation:S:Washington";
   test_resolve_success(chain, did);
@@ -240,7 +263,7 @@ TEST_CASE("TestSubjectWithStateS")
 TEST_CASE("TestSubjectWithStateSandST")
 {
   auto chain = load_certificate_chain("ms-code-signing.pem");
-  auto did =
+  const auto* did =
     "did:x509:0:sha256:hH32p4SXlD8n_HLrk_mmNzIKArVh0KkbCeh6eAftfGE"
     "::subject:CN:Microsoft%20Corporation:S:Washington:ST:Washington";
   test_resolve_error(chain, did, "duplicate field 'ST'");
@@ -253,16 +276,16 @@ TEST_CASE("TestSubjectWithStateSandST")
 TEST_CASE("TestSubjectInvalidName")
 {
   auto chain = load_certificate_chain("ms-code-signing.pem");
-  auto did =
+  const auto* did =
     "did:x509:0:sha256:hH32p4SXlD8n_HLrk_mmNzIKArVh0KkbCeh6eAftfGE"
     "::subject:CN:MicrosoftCorporation";
   test_resolve_error(chain, did, "invalid subject key/value");
-}
+} // NOLINT(clang-analyzer-cplusplus.NewDeleteLeaks)
 
 TEST_CASE("TestSubjectDuplicateField")
 {
   auto chain = load_certificate_chain("ms-code-signing.pem");
-  auto did =
+  const auto* did =
     "did:x509:0:sha256:hH32p4SXlD8n_HLrk_mmNzIKArVh0KkbCeh6eAftfGE"
     "::subject:CN:Microsoft%20Corporation:CN:Microsoft%20Corporation";
   test_resolve_error(chain, did, "duplicate field");
@@ -283,20 +306,20 @@ TEST_CASE("TestSubjectExactMatchRequired")
     chain, base + "::subject:CN:Microsoft", "invalid subject key/value");
   // Single-character substring of CN.
   test_resolve_error(
-    chain, base + "::subject:CN:M", "invalid subject key/value");
+    chain, base + "::subject:CN:M", "invalid subject key/value"); // NOLINT(clang-analyzer-cplusplus.NewDeleteLeaks)
   // Suffix substring of CN.
   test_resolve_error(
-    chain, base + "::subject:CN:Corporation", "invalid subject key/value");
+    chain, base + "::subject:CN:Corporation", "invalid subject key/value"); // NOLINT(clang-analyzer-cplusplus.NewDeleteLeaks)
   // Interior substring of CN (with the space percent-encoded).
   test_resolve_error(
-    chain, base + "::subject:CN:soft%20Corp", "invalid subject key/value");
+    chain, base + "::subject:CN:soft%20Corp", "invalid subject key/value"); // NOLINT(clang-analyzer-cplusplus.NewDeleteLeaks)
   // Substring of the O attribute.
   test_resolve_error(
-    chain, base + "::subject:O:Micro", "invalid subject key/value");
+    chain, base + "::subject:O:Micro", "invalid subject key/value"); // NOLINT(clang-analyzer-cplusplus.NewDeleteLeaks)
 
   // The exact, complete value still resolves.
   test_resolve_success(
-    chain, base + "::subject:CN:Microsoft%20Corporation");
+    chain, base + "::subject:CN:Microsoft%20Corporation"); // NOLINT(clang-analyzer-cplusplus.NewDeleteLeaks)
 }
 
 TEST_CASE("TestSubjectUtf8Value")
@@ -320,7 +343,7 @@ TEST_CASE("TestSubjectUtf8Value")
 
   // The ASCII CN matches exactly.
   test_resolve_success(
-    chain, base + "::subject:CN:didx509cpp%20UTF8%20Test%20Leaf");
+    chain, base + "::subject:CN:didx509cpp%20UTF8%20Test%20Leaf"); // NOLINT(clang-analyzer-cplusplus.NewDeleteLeaks)
 }
 
 TEST_CASE("TestSubjectCustomOid")
@@ -349,13 +372,14 @@ TEST_CASE("TestSubjectCustomOid")
   // Standard CN attribute still resolves (positive control).
   test_resolve_success(
     chain,
-    base + "::subject:CN:didx509cpp%20Custom%20OID%20Test%20Leaf");
+    base + "::subject:CN:didx509cpp%20Custom%20OID%20Test%20Leaf"); // NOLINT(clang-analyzer-cplusplus.NewDeleteLeaks)
 }
 
 TEST_CASE("TestDIDParserErrors")
 {
   auto chain = load_certificate_chain("ms-code-signing.pem");
-  auto did = "did:x509:0:sha256:hH32p4SXlD8n_HLrk_mmNzIKArVh0KkbCeh6eAftfGE";
+  const auto* did =
+    "did:x509:0:sha256:hH32p4SXlD8n_HLrk_mmNzIKArVh0KkbCeh6eAftfGE";
   test_resolve_error(chain, did, "invalid DID string");
 
   did =
@@ -363,7 +387,7 @@ TEST_CASE("TestDIDParserErrors")
     "::subject:CN:Microsoft%20Corporation";
   test_resolve_error(chain, did, "unsupported did:x509 version");
 
-  did =
+  did = // NOLINT(clang-analyzer-cplusplus.NewDeleteLeaks)
     "did:x509:0:sha256:hH32p4SXlD8n_HLrk_mmNzIKArVh0KkbCeh6eAftfGE"
     "::subject";
   test_resolve_error(chain, did, "invalid policy");
@@ -373,7 +397,7 @@ TEST_CASE("TestDIDParserErrors")
     "::subject:CN";
   test_resolve_error(chain, did, "key-value pairs required");
 
-  did =
+  did = // NOLINT(clang-analyzer-cplusplus.NewDeleteLeaks)
     "did:x509:0:sha256:hH32p4SXlD8n_HLrk_mmNzIKArVh0KkbCeh6eAftfGE"
     "::subject:DC:example";
   test_resolve_error(chain, did, "unsupported subject key");
@@ -383,21 +407,21 @@ TEST_CASE("TestDIDParserErrors")
     "::san:email";
   test_resolve_error(chain, did, "exactly one SAN type and value required");
 
-  did =
+  did = // NOLINT(clang-analyzer-cplusplus.NewDeleteLeaks)
     "did:x509:0:sha256:hH32p4SXlD8n_HLrk_mmNzIKArVh0KkbCeh6eAftfGE"
     "::eku:1.2.3:1.2.4";
   test_resolve_error(chain, did, "exactly one EKU required");
 
-  did =
+  did = // NOLINT(clang-analyzer-cplusplus.NewDeleteLeaks)
     "did:x509:0:sha256:hH32p4SXlD8n_HLrk_mmNzIKArVh0KkbCeh6eAftfGE"
     "::fulcio-issuer:issuer:extra";
   test_resolve_error(chain, did, "excessive arguments to fulcio-issuer");
-}
+} // NOLINT(clang-analyzer-cplusplus.NewDeleteLeaks)
 
 TEST_CASE("TestSAN")
 {
   auto chain = load_certificate_chain("fulcio-email.pem");
-  auto did =
+  const auto* did =
     "did:x509:0:sha256:O6e2zE6VRp1NM0tJyyV62FNwdvqEsMqH_07P5qVGgME"
     "::san:email:igarcia%40suse.com";
   test_resolve_success(chain, did);
@@ -406,7 +430,7 @@ TEST_CASE("TestSAN")
 TEST_CASE("TestSANInvalidType")
 {
   auto chain = load_certificate_chain("fulcio-email.pem");
-  auto did =
+  const auto* did =
     "did:x509:0:sha256:O6e2zE6VRp1NM0tJyyV62FNwdvqEsMqH_07P5qVGgME"
     "::san:uri:igarcia%40suse.com";
   test_resolve_error(chain, did, "SAN not found");
@@ -415,16 +439,16 @@ TEST_CASE("TestSANInvalidType")
 TEST_CASE("TestSANInvalidValue")
 {
   auto chain = load_certificate_chain("fulcio-email.pem");
-  auto did =
+  const auto* did =
     "did:x509:0:sha256:O6e2zE6VRp1NM0tJyyV62FNwdvqEsMqH_07P5qVGgME"
     "::email:bob%40example.com";
   test_resolve_error(chain, did, "unsupported did:x509 scheme");
-}
+} // NOLINT(clang-analyzer-cplusplus.NewDeleteLeaks)
 
 TEST_CASE("TestSANWithDns")
 {
   auto chain = load_certificate_chain("dns-san.pem");
-  auto did =
+  const auto* did =
     "did:x509:0:sha256:T1HzOxsDN5SKU6VYKcUFzNVlWiLdxbJ4H7w5WuYcUkM"
     "::san:dns:san-test.example.com";
   test_resolve_success(chain, did);
@@ -433,16 +457,16 @@ TEST_CASE("TestSANWithDns")
 TEST_CASE("TestSANWithIpAddressRejected")
 {
   auto chain = load_certificate_chain("dns-san.pem");
-  auto did =
+  const auto* did =
     "did:x509:0:sha256:T1HzOxsDN5SKU6VYKcUFzNVlWiLdxbJ4H7w5WuYcUkM"
     "::san:ipaddress:127.0.0.1";
   test_resolve_error(chain, did, "unknown SAN type: ipaddress");
-}
+} // NOLINT(clang-analyzer-cplusplus.NewDeleteLeaks)
 
 TEST_CASE("TestSANUnknownType")
 {
   auto chain = load_certificate_chain("dns-san.pem");
-  auto did =
+  const auto* did =
     "did:x509:0:sha256:T1HzOxsDN5SKU6VYKcUFzNVlWiLdxbJ4H7w5WuYcUkM"
     "::san:other:value";
   test_resolve_error(chain, did, "unknown SAN type");
@@ -495,7 +519,7 @@ TEST_CASE("TestCNEmbeddedNulNotTruncated")
   // NUL-terminated C string.  A certificate whose CN is "trusted\0evil" must
   // NOT compare equal to "trusted" (no truncation at the NUL), and MUST
   // compare equal to the full value including the NUL.
-  UqX509 cert(load_certificate_chain("cn-embedded-nul.pem"));
+  UqX509 const cert(load_certificate_chain("cn-embedded-nul.pem"));
 
   // The prefix before the NUL must not match (no truncation at the NUL).
   CHECK_FALSE(cert.has_common_name("trusted"));
@@ -512,7 +536,7 @@ TEST_CASE("TestCNUtf8Value")
   // The certificate has CN = "café Test", a non-ASCII UTF-8 value stored as
   // a UTF8String.  has_common_name() must decode it correctly via
   // ASN1_STRING_to_UTF8 rather than treating it as raw bytes.
-  UqX509 cert(load_certificate_chain("cn-utf8.pem"));
+  UqX509 const cert(load_certificate_chain("cn-utf8.pem"));
 
   // Exact UTF-8 value must match.
   CHECK(cert.has_common_name("caf\xc3\xa9 Test"));
@@ -548,7 +572,7 @@ TEST_CASE("TestSANNoSubjectFallback")
 TEST_CASE("TestBadEKU")
 {
   auto chain = load_certificate_chain("ms-code-signing.pem");
-  auto did =
+  const auto* did =
     "did:x509:0:sha256:hH32p4SXlD8n_HLrk_mmNzIKArVh0KkbCeh6eAftfGE"
     "::eku:1.3.6.1.5.5.7.3.12";
   test_resolve_error(chain, did, "EKU not found");
@@ -557,7 +581,7 @@ TEST_CASE("TestBadEKU")
 TEST_CASE("TestGoodEKU")
 {
   auto chain = load_certificate_chain("ms-code-signing.pem");
-  auto did =
+  const auto* did =
     "did:x509:0:sha256:hH32p4SXlD8n_HLrk_mmNzIKArVh0KkbCeh6eAftfGE"
     "::eku:1.3.6.1.4.1.311.10.3.21";
   test_resolve_success(chain, did);
@@ -566,7 +590,7 @@ TEST_CASE("TestGoodEKU")
 TEST_CASE("TestEKUInvalidValue")
 {
   auto chain = load_certificate_chain("ms-code-signing.pem");
-  auto did =
+  const auto* did =
     "did:x509:0:sha256:hH32p4SXlD8n_HLrk_mmNzIKArVh0KkbCeh6eAftfGE"
     "::eku:1.2.3";
   test_resolve_error(chain, did, "EKU not found");
@@ -575,7 +599,7 @@ TEST_CASE("TestEKUInvalidValue")
 TEST_CASE("TestFulcioIssuerWithEmailSAN")
 {
   auto chain = load_certificate_chain("fulcio-email.pem");
-  auto did =
+  const auto* did =
     "did:x509:0:sha256:O6e2zE6VRp1NM0tJyyV62FNwdvqEsMqH_07P5qVGgME"
     "::fulcio-issuer:github.com%2Flogin%2Foauth"
     "::san:email:igarcia%40suse.com";
@@ -585,7 +609,7 @@ TEST_CASE("TestFulcioIssuerWithEmailSAN")
 TEST_CASE("TestFulcioIssuerWithURISAN")
 {
   auto chain = load_certificate_chain("fulcio-github-actions.pem");
-  auto did =
+  const auto* did =
     "did:x509:0:sha256:O6e2zE6VRp1NM0tJyyV62FNwdvqEsMqH_07P5qVGgME"
     "::fulcio-issuer:token.actions.githubusercontent.com"
     "::san:uri:https%3A%2F%2Fgithub.com%2Fbrendancassells%2Fmcw-continuous-"
@@ -597,7 +621,7 @@ TEST_CASE("TestFulcioIssuerWithURISAN")
 TEST_CASE("TestInvalidFulcioIssuer")
 {
   auto chain = load_certificate_chain("fulcio-email.pem");
-  auto did =
+  const auto* did =
     "did:x509:0:sha256:O6e2zE6VRp1NM0tJyyV62FNwdvqEsMqH_07P5qVGgME"
     "::fulcio-issuer:example.com"
     "::san:email:igarcia%40suse.com";
@@ -626,8 +650,8 @@ TEST_CASE("TestDIDDocumentKeyUsageSections")
 TEST_CASE("TestResolveChainDirectly")
 {
   auto chain_pem = load_certificate_chain("ms-code-signing.pem");
-  UqSTACK_OF_X509 chain(chain_pem);
-  auto did =
+  UqSTACK_OF_X509 const chain(chain_pem);
+  const auto* did =
     "did:x509:0:sha256:hH32p4SXlD8n_HLrk_mmNzIKArVh0KkbCeh6eAftfGE"
     "::subject:CN:Microsoft%20Corporation";
   auto valid_chain = resolve_chain(chain, did, true);
@@ -640,10 +664,10 @@ TEST_CASE("TestVerifyHonorsProvidedRoots")
   // verify() must anchor trust on the roots it is given, not on the chain's
   // own last certificate. The loop previously added back() (the chain's last
   // certificate) for every entry in `roots`, ignoring the provided roots.
-  UqSTACK_OF_X509 chain(load_certificate_chain("ms-code-signing.pem"));
+  UqSTACK_OF_X509 const chain(load_certificate_chain("ms-code-signing.pem"));
 
   // A certificate from an unrelated chain that signed nothing in `chain`.
-  UqSTACK_OF_X509 unrelated(load_certificate_chain("fulcio-email.pem"));
+  UqSTACK_OF_X509 const unrelated(load_certificate_chain("fulcio-email.pem"));
   std::vector<UqX509> roots;
   roots.emplace_back(unrelated.back());
 
@@ -667,7 +691,7 @@ TEST_CASE("TestInvalidLeafOnly")
     doctest::Contains("certificate chain too short"));
 }
 
-static std::vector<uint8_t> base64url_decode(const std::string& in)
+std::vector<uint8_t> base64url_decode(const std::string& in)
 {
   std::string b64 = in;
   std::replace(b64.begin(), b64.end(), '-', '+');
@@ -677,14 +701,18 @@ static std::vector<uint8_t> base64url_decode(const std::string& in)
 
   std::vector<uint8_t> out((b64.size() / 4) * 3);
   const int decoded_len = EVP_DecodeBlock(out.data(),
-    reinterpret_cast<const unsigned char*>(b64.data()),
+    std::bit_cast<const unsigned char*>(b64.data()),
     static_cast<int>(b64.size()));
   if (decoded_len < 0)
+  {
     return {};
+  }
 
-  size_t out_len = static_cast<size_t>(decoded_len);
+  auto out_len = static_cast<size_t>(decoded_len);
   if (pad <= out_len)
+  {
     out_len -= pad;
+  }
   out.resize(out_len);
   return out;
 }
@@ -696,7 +724,7 @@ TEST_CASE("TestEcJwkCoordinatePadding")
   // 32-octet field element, so the JWK must left-pad them rather than emit the
   // minimal (31-octet) big-endian integer encoding.
   auto chain = load_certificate_chain("ec-leading-zero.pem");
-  auto did =
+  const auto* did =
     "did:x509:0:sha256:SGI1ucfnPQ6_Rx2YIurUyv75tHSapBv2_aiXaGtxP8w"
     "::subject:CN:didx509cpp%20EC%20Test%20Leaf";
 
@@ -718,13 +746,18 @@ TEST_CASE("to_base64 and to_base64url empty input")
   CHECK(to_base64({}) == "");
   CHECK(to_base64url({}) == "");
 }
+}
 
 int main(int argc, char** argv)
 {
   doctest::Context ctx;
   ctx.applyCommandLine(argc, argv);
   for (size_t i = 0; i < argc; i++)
+  {
     if (i < argc - 1 && strcmp(argv[i], "--data-dir") == 0)
-      test_data_dir = argv[i + 1];
+    {
+      test_data_dir() = argv[i + 1];
+    }
+  }
   return ctx.run();
 }
