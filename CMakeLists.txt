@@ -34,14 +34,19 @@ if(CLANG_TIDY)
 
   message(STATUS "Using clang-tidy from: ${CLANG_TIDY_EXE}")
 
+  function(enable_clang_tidy TARGET)
+    set_property(
+      TARGET ${TARGET}
+      PROPERTY CXX_CLANG_TIDY "${CLANG_TIDY_EXE}"
+    )
+  endfunction()
+
   # Compile a minimal translation unit so clang-tidy can check this header-only
   # library without reporting findings from the unit test implementation.
-  add_library(clang-tidy OBJECT test/clang_tidy.cpp)
-  target_link_libraries(clang-tidy PRIVATE didx509cpp)
-  set_property(
-    TARGET clang-tidy
-    PROPERTY CXX_CLANG_TIDY "${CLANG_TIDY_EXE}"
-  )
+  add_library(clang-tidy-library OBJECT test/clang_tidy.cpp)
+  target_link_libraries(clang-tidy-library PRIVATE didx509cpp)
+  enable_clang_tidy(clang-tidy-library)
+  add_custom_target(clang-tidy DEPENDS clang-tidy-library)
 endif()
 
 if(TESTS)
@@ -50,6 +55,32 @@ if(TESTS)
   function(add_unit_test NAME SRC)
     add_executable(${NAME} ${SRC})
     target_link_libraries(${NAME} PRIVATE $<BUILD_INTERFACE:didx509cpp>)
+
+    if(CLANG_TIDY)
+      # Establish test coverage without making pre-existing test-only findings
+      # block adoption. Library diagnostics remain governed by .clang-tidy.
+      string(
+        CONCAT
+        TEST_CLANG_TIDY_EXCLUSIONS
+        "-clang-analyzer-cplusplus.NewDeleteLeaks"
+        ",-cppcoreguidelines-avoid-non-const-global-variables"
+        ",-cppcoreguidelines-pro-type-reinterpret-cast"
+        ",-misc-const-correctness"
+        ",-misc-include-cleaner"
+        ",-misc-use-anonymous-namespace"
+        ",-modernize-use-auto"
+        ",-modernize-use-emplace"
+        ",-readability-braces-around-statements"
+        ",-readability-qualified-auto"
+      )
+      set_property(
+        TARGET ${NAME}
+        PROPERTY
+          CXX_CLANG_TIDY
+          "${CLANG_TIDY_EXE};--checks=${TEST_CLANG_TIDY_EXCLUSIONS}"
+      )
+      add_dependencies(clang-tidy ${NAME})
+    endif()
 
     if(PROFILE)
       target_compile_options(${NAME} PRIVATE -g -pg)

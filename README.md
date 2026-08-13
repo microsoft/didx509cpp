@@ -35,7 +35,7 @@ target:
 cmake -S . -B build/clang-tidy \
   -DCMAKE_CXX_COMPILER=clang++-18 \
   -DCLANG_TIDY=ON \
-  -DTESTS=OFF
+  -DTESTS=ON
 cmake --build build/clang-tidy --target clang-tidy
 ```
 
