@@ -3579,7 +3579,7 @@ String::String() noexcept {
 }
 
 String::~String() {
-    if(!isOnStack())
+    if(!isOnStack()) // NOLINT(clang-analyzer-cplusplus.NewDeleteLeaks)
         delete[] data.ptr;
 } // NOLINT(clang-analyzer-cplusplus.NewDeleteLeaks)
 
