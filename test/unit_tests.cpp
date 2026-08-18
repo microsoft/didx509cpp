@@ -115,9 +115,11 @@ void test_resolve_jwk_error(
     resolve_jwk(chain, did, true), doctest::Contains(error_msg));
 }
 
-// doctest::String's manual small-string optimization triggers analyzer leak
-// false positives at some assertion sites. Keep suppressions on those exact
-// diagnostics rather than disabling the check for the test target.
+// Clang's path-sensitive analyzer reports false leaks for assertions whose
+// doctest diagnostic strings use heap storage: it does not connect the
+// allocation in doctest::String's small-string optimization with the matching
+// delete in its destructor. Keep suppressions on the reported assertion paths
+// rather than disabling the check for the test target.
 TEST_CASE("Wrong prefix")
 {
   auto chain = load_certificate_chain("ms-code-signing.pem");
