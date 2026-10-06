@@ -1,0 +1,25 @@
+# Copyright (c) Microsoft Corporation.
+# Licensed under the MIT License.
+
+[root]
+basicConstraints = critical,CA:TRUE
+keyUsage = critical,keyCertSign,cRLSign
+subjectKeyIdentifier = hash
+authorityKeyIdentifier = keyid:always
+1.3.6.1.4.1.57264.1.23 = ASN1:UTF8String:root-only
+
+[leaf]
+basicConstraints = critical,CA:FALSE
+keyUsage = critical,digitalSignature
+subjectKeyIdentifier = hash
+authorityKeyIdentifier = keyid:always
+subjectAltName = critical,@san
+1.3.6.1.4.1.57264.1.1 = DER:68:74:74:70:73:3a:2f:2f:6c:65:67:61:63:79:2e:65:78:61:6d:70:6c:65:2e:63:6f:6d
+1.3.6.1.4.1.57264.1.8 = ASN1:UTF8String:https://v2.example.com
+1.3.6.1.4.1.57264.1.24 = ASN1:UTF8String:alice
+
+[san]
+DNS.1 = othername.example.com
+otherName.1 = 1.3.6.1.4.1.57264.1.7;UTF8:alice!example.com
+otherName.2 = 1.3.6.1.4.1.57264.1.7;UTF8:bob!example.com
+otherName.3 = 1.3.6.1.4.1.57264.1.7;UTF8:alice!example.com

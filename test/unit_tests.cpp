@@ -10,12 +10,22 @@
 #include <cstdint>
 #include <cstring>
 #include <fstream>
+#include <initializer_list>
+#include <memory>
+#include <openssl/asn1.h>
 #include <openssl/evp.h>
+#include <openssl/ossl_typ.h>
+#include <openssl/pem.h>
+#include <openssl/x509.h>
 #include <sstream>
 #include <stdexcept>
 #include <string>
 #include <string_view>
 #include <vector>
+
+#if defined(OPENSSL_VERSION_MAJOR) && OPENSSL_VERSION_MAJOR >= 3
+#  include <openssl/types.h>
+#endif
 
 #define DOCTEST_CONFIG_IMPLEMENT
 #include <doctest.h>
@@ -31,7 +41,7 @@ std::string& test_data_dir()
   return path;
 }
 
-std::string load_certificate_chain(const std::string& path)
+std::string load_test_data(const std::string& path)
 {
   std::ifstream const t(test_data_dir() + "/" + path);
   if (!t.good())
@@ -41,6 +51,11 @@ std::string load_certificate_chain(const std::string& path)
   std::stringstream ss;
   ss << t.rdbuf();
   return ss.str();
+}
+
+std::string load_certificate_chain(const std::string& path)
+{
+  return load_test_data(path);
 }
 
 std::vector<std::string> split_x509_cert_bundle(
@@ -69,6 +84,7 @@ std::vector<std::string> split_x509_cert_bundle(
 
 void test_resolve_success(const std::string& chain, const std::string& did)
 {
+  const auto document_id = did.substr(0, did.find('#'));
   std::string did_doc;
   REQUIRE_NOTHROW(did_doc = resolve(chain, did, true));
   // Verify that resolved DID document is valid JSON
@@ -80,12 +96,12 @@ void test_resolve_success(const std::string& chain, const std::string& did)
     nlohmann::json::array(
       {"https://www.w3.org/ns/did/v1",
        "https://w3id.org/security/suites/jws-2020/v1"}));
-  CHECK(doc["id"] == did);
+  CHECK(doc["id"] == document_id);
   REQUIRE(doc["verificationMethod"].is_array());
   REQUIRE(doc["verificationMethod"].size() == 1);
-  CHECK(doc["verificationMethod"][0]["id"] == did + "#0");
+  CHECK(doc["verificationMethod"][0]["id"] == document_id + "#0");
   CHECK(doc["verificationMethod"][0]["type"] == "JsonWebKey2020");
-  CHECK(doc["verificationMethod"][0]["controller"] == did);
+  CHECK(doc["verificationMethod"][0]["controller"] == document_id);
   CHECK(doc["verificationMethod"][0]["publicKeyJwk"].contains("kty"));
   
   std::string jwk;
@@ -95,6 +111,7 @@ void test_resolve_success(const std::string& chain, const std::string& did)
   nlohmann::json jwk_doc;
   REQUIRE_NOTHROW(jwk_doc = nlohmann::json::parse(jwk));
   CHECK(jwk_doc.contains("kty"));
+  CHECK(doc["verificationMethod"][0]["publicKeyJwk"] == jwk_doc);
 }
 
 void test_resolve_error(
@@ -718,6 +735,300 @@ std::vector<uint8_t> base64url_decode(const std::string& in)
   out.resize(out_len);
   return out;
 }
+
+const nlohmann::json& fulcio_test_vectors()
+{
+  static const auto vectors =
+    nlohmann::json::parse(load_test_data("fulcio-test-vectors.json"));
+  return vectors;
+}
+
+std::vector<std::string> vector_certificate_chain(const nlohmann::json& vector)
+{
+  std::vector<std::string> chain;
+  for (const auto& encoded : vector.at("input").at("chain"))
+  {
+    const auto bytes = base64url_decode(encoded.get<std::string>());
+    const UqBIO der(bytes);
+    const std::unique_ptr<X509, decltype(&X509_free)> cert(
+      d2i_X509_bio(der, nullptr), X509_free);
+    CHECKNULL(cert.get());
+    UqBIO pem;
+    CHECK1(PEM_write_bio_X509(pem, cert.get()));
+    chain.push_back(pem.to_string());
+  }
+  return chain;
+}
+
+TEST_CASE("Fulcio and OtherName specification vectors")
+{
+  const auto& vectors = fulcio_test_vectors();
+  REQUIRE(vectors.is_array());
+  REQUIRE(vectors.size() == 162);
+  for (const auto& vector : vectors)
+  {
+    SUBCASE(vector.at("id").get_ref<const std::string&>().c_str())
+    {
+      const auto pems = vector_certificate_chain(vector);
+      std::string pem_chain;
+      for (const auto& pem : pems)
+      {
+        pem_chain += pem;
+      }
+      const UqSTACK_OF_X509 chain(pems);
+      const auto did = vector.at("input").at("did").get<std::string>();
+      const auto& output = vector.at("output");
+      if (output.contains("error"))
+      {
+        REQUIRE_THROWS_AS(resolve_chain(chain, did, true), std::runtime_error);
+        REQUIRE_THROWS_AS(resolve(pem_chain, did, true), std::runtime_error);
+        REQUIRE_THROWS_AS(resolve_jwk(pems, did, true), std::runtime_error);
+      }
+      else
+      {
+        UqSTACK_OF_X509 verified;
+        REQUIRE_NOTHROW(verified = resolve_chain(chain, did, true));
+        CHECK(verified.size() == chain.size());
+        CHECK(verified.front().der() == chain.front().der());
+        const auto& expected_jwk = output.at("document")
+                                     .at("verificationMethod")
+                                     .at(0)
+                                     .at("publicKeyJwk");
+        // Synthetic upstream vectors use Ed25519, whose JWK export is not
+        // supported here. All vectors still exercise path and predicate checks.
+        if (expected_jwk.at("kty") != "OKP")
+        {
+          test_resolve_success(pem_chain, did);
+          CHECK(
+            nlohmann::json::parse(resolve_jwk(pems, did, true)) ==
+            expected_jwk);
+        }
+      }
+    }
+  }
+}
+
+std::string der_octets(std::initializer_list<uint8_t> bytes)
+{
+  return {bytes.begin(), bytes.end()};
+}
+
+std::string der_tlv(uint8_t tag, const std::string& content)
+{
+  std::string encoded(1, static_cast<char>(tag));
+  if (content.size() < 128)
+  {
+    encoded.push_back(static_cast<char>(content.size()));
+  }
+  else
+  {
+    std::string octets;
+    for (size_t length = content.size(); length != 0; length >>= 8)
+    {
+      octets.push_back(static_cast<char>(length & 0xff));
+    }
+    encoded.push_back(static_cast<char>(0x80 | octets.size()));
+    encoded.append(octets.rbegin(), octets.rend());
+  }
+  return encoded + content;
+}
+
+UqX509_EXTENSION raw_extension(
+  const std::string& oid, const std::string& encoded, bool critical = false)
+{
+  const std::unique_ptr<ASN1_OCTET_STRING, decltype(&ASN1_OCTET_STRING_free)>
+    data(ASN1_OCTET_STRING_new(), ASN1_OCTET_STRING_free);
+  CHECKNULL(data.get());
+  CHECK1(ASN1_OCTET_STRING_set(
+    data.get(),
+    std::bit_cast<const unsigned char*>(encoded.data()),
+    static_cast<int>(encoded.size())));
+  const std::unique_ptr<X509_EXTENSION, decltype(&X509_EXTENSION_free)> ext(
+    X509_EXTENSION_create_by_OBJ(
+      nullptr, UqASN1_OBJECT(oid), static_cast<int>(critical), data.get()),
+    X509_EXTENSION_free);
+  CHECKNULL(ext.get());
+  return {ext.get()};
+}
+
+std::string othername_der(const std::string& inner)
+{
+  const std::string oid = "\x06\x0a\x2b\x06\x01\x04\x01\x83\xbf\x30\x01\x07";
+  return der_tlv(0xa0, oid + der_tlv(0xa0, inner));
+}
+
+TEST_CASE("Strict DER UTF8String and OtherName decoding")
+{
+  const std::vector<std::string> valid = {
+    "",
+    "alice!example.com",
+    "\xef\xbf\xbd",
+    "caf\xc3\xa9",
+    "\xf4\x8f\xbf\xbf",
+    std::string(1, '\0'),
+    std::string(127, 'a'),
+    std::string(128, 'a'),
+    std::string(255, 'a'),
+    std::string(256, 'a'),
+    std::string(65536, 'a'),
+    std::string(126, 'a') + "\xc3\xa9"};
+  for (const auto& value : valid)
+  {
+    const auto encoded = der_tlv(0x0c, value);
+    CHECK(decode_der_utf8_string(encoded) == value);
+    const auto ext =
+      raw_extension("2.5.29.17", der_tlv(0x30, othername_der(encoded)));
+    const UqSUBJECT_ALT_NAME san(ext);
+    REQUIRE(san.size() == 1);
+    CHECK(san.at(0).othername_value() == value);
+  }
+
+  const std::vector<std::string> invalid = {
+    "",
+    "alice!example.com",
+    der_octets({0x16, 0x01, 'a'}),
+    der_octets({0x13, 0x01, 'a'}),
+    der_octets({0x1e, 0x02, 0x00, 'a'}),
+    der_octets({0x04, 0x01, 'a'}),
+    der_octets({0x02, 0x01, 0x01}),
+    der_octets({0x4c, 0x01, 'a'}),
+    der_octets({0x8c, 0x01, 'a'}),
+    der_octets({0xcc, 0x01, 'a'}),
+    der_octets({0x2c, 0x03, 0x0c, 0x01, 'a'}),
+    der_octets({0x1f, 0x0c, 0x01, 'a'}),
+    der_octets({0x0c}),
+    der_octets({0x0c, 0x80}),
+    der_octets({0x0c, 0xff}),
+    der_octets({0x0c, 0x82, 0x01}),
+    der_octets({0x0c, 0x81, 0x01, 'a'}),
+    der_octets({0x0c, 0x82, 0x00, 0x80}) + std::string(128, 'a'),
+    der_octets({0x0c, 0x02, 'a'}),
+    der_octets({0x0c, 0x01, 'a', 'b'}),
+    der_octets({0x0c, 0x01, 'a', 0x0c, 0x01, 'b'}),
+    der_octets({0x0c, 0x01, 0xff}),
+    der_octets({0x0c, 0x02, 0xc0, 0xaf}),
+    der_octets({0x0c, 0x03, 0xed, 0xa0, 0x80}),
+    der_octets({0x0c, 0x04, 0xf4, 0x90, 0x80, 0x80}),
+    der_octets({0x0c, 0x01, 0xc3}),
+    der_octets(
+      {0x0c, 0x89, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00})};
+  const auto good = othername_der(der_tlv(0x0c, "alice!example.com"));
+  for (const auto& encoded : invalid)
+  {
+    INFO(to_base64(std::vector<uint8_t>(encoded.begin(), encoded.end())));
+    CHECK_THROWS_AS(decode_der_utf8_string(encoded), std::runtime_error);
+    const auto bad = othername_der(encoded);
+    for (const auto& names : {good + bad, bad + good})
+    {
+      const auto ext = raw_extension("2.5.29.17", der_tlv(0x30, names));
+      CHECK_THROWS_AS((void)UqSUBJECT_ALT_NAME{ext}, std::runtime_error);
+    }
+  }
+}
+
+TEST_CASE("OtherName explicit wrappers must be well formed")
+{
+  const std::string oid = "\x06\x0a\x2b\x06\x01\x04\x01\x83\xbf\x30\x01\x07";
+  const auto value = der_tlv(0x0c, "alice!example.com");
+  const std::vector<std::string> wrappers = {
+    value,
+    der_tlv(0x80, value),
+    der_tlv(0xa1, value),
+    der_tlv(0xa0, value + value)};
+  for (const auto& wrapper : wrappers)
+  {
+    const auto ext =
+      raw_extension("2.5.29.17", der_tlv(0x30, der_tlv(0xa0, oid + wrapper)));
+    CHECK_THROWS_AS((void)UqSUBJECT_ALT_NAME{ext}, std::runtime_error);
+  }
+}
+
+TEST_CASE("Every registered Fulcio field is decoded eagerly")
+{
+  REQUIRE(fulcio_extension_oids().size() == 17);
+  const auto pem =
+    split_x509_cert_bundle(load_certificate_chain("ms-code-signing.pem"))
+      .front();
+  for (const auto& entry : fulcio_extension_oids())
+  {
+    const auto& field = entry.first;
+    const auto& oid = entry.second;
+    INFO(field);
+    for (const auto& value :
+         {std::string{}, std::string("opaque:%/caf\xc3\xa9")})
+    {
+      const UqX509 cert(pem);
+      const auto ext = raw_extension(oid, der_tlv(0x0c, value));
+      CHECK1(X509_add_ext(cert, ext, -1));
+      const auto fields = cert.fulcio_extensions();
+      REQUIRE(fields.size() == 1);
+      CHECK(fields.at(field) == value);
+    }
+    {
+      const UqX509 cert(pem);
+      const auto ext = raw_extension(oid, der_tlv(0x16, "opaque"));
+      CHECK1(X509_add_ext(cert, ext, -1));
+      CHECK_THROWS_WITH(
+        (void)cert.fulcio_extensions(),
+        doctest::Contains("primitive DER UTF8String"));
+    }
+    {
+      const UqX509 cert(pem);
+      const auto ext = raw_extension(oid, der_tlv(0x0c, "opaque"), true);
+      CHECK1(X509_add_ext(cert, ext, -1));
+      CHECK_THROWS_WITH(
+        (void)cert.fulcio_extensions(), doctest::Contains("critical"));
+    }
+    {
+      const UqX509 cert(pem);
+      const auto ext = raw_extension(oid, der_tlv(0x0c, "opaque"));
+      CHECK1(X509_add_ext(cert, ext, -1));
+      CHECK1(X509_add_ext(cert, ext, -1));
+      CHECK_THROWS_WITH(
+        (void)cert.fulcio_extensions(), doctest::Contains("duplicate"));
+    }
+  }
+}
+
+TEST_CASE("Fulcio and OtherName predicates through document and JWK resolution")
+{
+  const auto pem = load_certificate_chain("fulcio-othername.pem");
+  const UqSTACK_OF_X509 chain(pem);
+  const auto base =
+    "did:x509:0:sha256:" + to_base64url(sha256(chain.back().der()));
+  const std::string alice =
+    "::san:othername:1.3.6.1.4.1.57264.1.7:alice%21example.com";
+  const std::string bob =
+    "::san:othername:1.3.6.1.4.1.57264.1.7:bob%21example.com";
+  const std::string v2 = "::fulcio:issuer:https%3A%2F%2Fv2.example.com";
+  const std::string legacy = "::fulcio-issuer:legacy.example.com";
+
+  test_resolve_success(pem, base + alice);
+  test_resolve_success(pem, base + alice + "#requested");
+  test_resolve_success(
+    pem, base + "::fulcio:issuer:https%3a%2f%2fv2.example.com#requested");
+  test_resolve_success(pem, base + bob + alice + bob);
+  test_resolve_success(
+    pem,
+    base + alice + "::san:dns:othername.example.com" + v2 + legacy +
+      "::fulcio:token-subject:alice");
+  test_resolve_error(
+    pem, base + "::san:othername:1.3.6.1.4.1.57264.1.7:alice", "SAN not found");
+  test_resolve_error(
+    pem,
+    base + alice + "::san:othername:1.3.6.1.4.1.57264.1.7:carol%21example.com",
+    "SAN not found");
+  test_resolve_error(
+    pem, base + "::fulcio-issuer:v2.example.com", "invalid fulcio-issuer");
+  test_resolve_error(
+    pem,
+    base + "::fulcio:issuer:https%3A%2F%2Flegacy.example.com",
+    "invalid Fulcio field/value");
+  test_resolve_error(
+    pem,
+    base + "::fulcio:deployment-environment:root-only", // NOLINT(clang-analyzer-cplusplus.NewDeleteLeaks)
+    "Fulcio extension not found"); // NOLINT(clang-analyzer-cplusplus.NewDeleteLeaks)
+} // NOLINT(clang-analyzer-cplusplus.NewDeleteLeaks)
 
 TEST_CASE("TestEcJwkCoordinatePadding")
 {
