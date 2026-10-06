@@ -57,12 +57,19 @@ extension `.1`, with `https://` omitted from the predicate value. It never falls
 back to `.8`, and `fulcio:issuer` never falls back to `.1`. Existing DID Document
 and JWK formats are unchanged. DID URL fragments are excluded from predicate
 matching and document IDs; percent-escape spelling in the DID is preserved.
+DID URL paths and queries are rejected. Slash and question-mark characters in
+identity values must be percent-encoded; they remain permitted inside fragments.
+All scalar predicates, including existing SAN, subject, and legacy issuer forms,
+require nonempty, correctly percent-encoded UTF-8 values.
 
 Registered OtherName values and standalone `.8`-`.24` extensions require a
 complete, minimally encoded DER UTF8String. Malformed or unsupported SAN entries
 and malformed registered Fulcio extensions fail resolution even when unselected
 or present on a CA certificate. Standalone Fulcio extensions must be noncritical;
 normal certificate path validation is not bypassed.
+Email, DNS, and URI SANs must contain valid ASCII IA5Strings. The supplied
+certificates must match the verified leaf-first chain exactly, so path building
+cannot silently discard malformed or duplicate evidence.
 
 ## Contributing
 

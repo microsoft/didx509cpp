@@ -55,3 +55,36 @@ fixtures, use an ignored build/fulcio-fixture directory from the repository root
 
 Remove the generated private keys and intermediate files after regeneration;
 only the public certificate bundle belongs in source control.
+
+Additional SAN validation fixtures
+---------------------------------
+
+san-scalar-syntax.pem contains a registered username OtherName, literal "%GG"
+values in DNS/email/URI SANs, empty SAN scalars, and a URI with a path and query.
+The subject CN and legacy issuer also contain a literal "%GG". Valid predicates
+encode the percent as "%25"; malformed escapes and empty selectors fail. Raw
+slashes/questions in a DID fail, while encoded identity values and fragments
+containing those characters remain valid.
+
+san-nonascii-dns.pem, san-nonascii-email.pem, and san-nonascii-uri.pem each contain
+a valid username OtherName alongside one IA5 SAN with the invalid byte 0xff.
+Their signatures and X.509 paths are valid, but resolution must reject the
+malformed entry even when the username predicate matches.
+
+The leaf-scalar-syntax and leaf-nonascii-* profiles in fulcio-othername.cnf encode
+these SANs as raw DER so fixture generation does not reject the negative values.
+Generate them from the repository root with:
+
+  mkdir -p build/san-review-fixtures
+  openssl genpkey -algorithm EC -pkeyopt ec_paramgen_curve:P-256 -out build/san-review-fixtures/root.key
+  openssl req -new -x509 -key build/san-review-fixtures/root.key -subj "/CN=didx509cpp SAN Review Root" -set_serial 1 -days 3650 -config test/test-data/fulcio-othername.cnf -extensions root -out build/san-review-fixtures/root.pem
+  openssl genpkey -algorithm EC -pkeyopt ec_paramgen_curve:P-256 -out build/san-review-fixtures/leaf.key
+  openssl req -new -key build/san-review-fixtures/leaf.key -subj "/CN=literal%GG" -out build/san-review-fixtures/leaf.csr
+  serial=10
+  for profile in scalar-syntax nonascii-dns nonascii-email nonascii-uri; do
+    openssl x509 -req -in build/san-review-fixtures/leaf.csr -CA build/san-review-fixtures/root.pem -CAkey build/san-review-fixtures/root.key -set_serial "$serial" -days 3650 -extfile test/test-data/fulcio-othername.cnf -extensions "leaf-$profile" -out build/san-review-fixtures/leaf.pem
+    cat build/san-review-fixtures/leaf.pem build/san-review-fixtures/root.pem > "test/test-data/san-$profile.pem"
+    serial=$((serial + 1))
+  done
+
+Remove only the generated keys, CSR, and intermediate PEM files after generation.

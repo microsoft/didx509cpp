@@ -500,6 +500,45 @@ namespace didx509
           ASN1_item_i2d_bio(ASN1_ITEM_rptr(ASN1_ANY), encoded, name->value));
         return decode_der_utf8_string(encoded.to_string());
       }
+
+      [[nodiscard]] std::string ia5_value() const
+      {
+        ASN1_IA5STRING* value = nullptr;
+        switch (p->type)
+        {
+          case GEN_EMAIL:
+            value = p->d.rfc822Name;
+            break;
+          case GEN_DNS:
+            value = p->d.dNSName;
+            break;
+          case GEN_URI:
+            value = p->d.uniformResourceIdentifier;
+            break;
+          default:
+            throw std::runtime_error("SAN is not an IA5String");
+        }
+        CHECKNULL(value);
+        const int length = ASN1_STRING_length(value);
+        const auto* data = ASN1_STRING_get0_data(value);
+        if (length < 0 || (length > 0 && data == nullptr))
+        {
+          throw std::runtime_error("invalid IA5String SAN");
+        }
+        std::string result;
+        if (length > 0)
+        {
+          result.assign(data, data + static_cast<size_t>(length));
+        }
+        for (const char c : result)
+        {
+          if (static_cast<uint8_t>(c) > 0x7f)
+          {
+            throw std::runtime_error("SAN value is not a valid IA5String");
+          }
+        }
+        return result;
+      }
     };
 
     struct UqSUBJECT_ALT_NAME
@@ -543,6 +582,8 @@ namespace didx509
             case GEN_EMAIL:
             case GEN_DNS:
             case GEN_URI:
+              (void)name.ia5_value();
+              break;
             case GEN_DIRNAME:
               break;
             default:
@@ -1019,40 +1060,7 @@ namespace didx509
               continue;
             }
 
-            // All three supported SAN types (dNSName, rfc822Name,
-            // uniformResourceIdentifier) are stored as IA5Strings.
-            const ASN1_IA5STRING* ia5 = nullptr;
-            switch (target_type)
-            {
-              case GEN_DNS:
-                ia5 = san_i->d.dNSName;
-                break;
-              case GEN_EMAIL:
-                ia5 = san_i->d.rfc822Name;
-                break;
-              case GEN_URI:
-                ia5 = san_i->d.uniformResourceIdentifier;
-                break;
-              default:
-                break;
-            }
-            if (ia5 == nullptr)
-            {
-              continue;
-            }
-
-            // Compare using the explicit length so that an embedded NUL byte
-            // does not truncate the value (which could otherwise be used to
-            // spoof a prefix of a pinned value).
-            const int len = ASN1_STRING_length(ia5);
-            const unsigned char* data = ASN1_STRING_get0_data(ia5);
-            if (data == nullptr || len < 0)
-            {
-              continue;
-            }
-            const std::string san_value{
-              data, data + static_cast<size_t>(len)};
-            if (san_value == value)
+            if (san_i.ia5_value() == value)
             {
               return true;
             }
@@ -1700,8 +1708,7 @@ namespace didx509
                       "exactly one SAN type and value required");
       }
       const std::string othername_oid = othername ? args[1] : "";
-      const auto san_value =
-        othername ? decode_scalar(args[2]) : url_unescape(args[1]);
+      const auto san_value = decode_scalar(args.back());
       if (!leaf.has_san(san_type, san_value, othername_oid))
       {
         throw std::runtime_error("SAN not found: " + san_value);
@@ -1735,7 +1742,15 @@ namespace didx509
 
     inline std::string did_document_id(const std::string& did)
     {
-      return did.substr(0, did.find('#'));
+      auto id = did.substr(0, did.find('#'));
+      const auto separator = id.find_first_of("/?");
+      if (separator != std::string::npos)
+      {
+        throw std::runtime_error(
+          std::string("DID URL ") +
+          (id[separator] == '/' ? "paths" : "queries") + " are not supported");
+      }
+      return id;
     }
 
     inline void verify(const UqSTACK_OF_X509& chain, const std::string& did)
@@ -1752,7 +1767,8 @@ namespace didx509
       auto pretokens = split(prefix, ":");
 
       if (
-        pretokens.size() < 5 || pretokens[0] != "did" || pretokens[1] != "x509")
+        pretokens.size() != 5 || pretokens[0] != "did" ||
+        pretokens[1] != "x509")
       {
         throw std::runtime_error("unsupported method/prefix");
       }
@@ -1822,7 +1838,7 @@ namespace didx509
               // to contain a duplicate field, and rejected.
               k = "ST";
             }
-            const auto& v = url_unescape(args[j + 1]);
+            const auto& v = decode_scalar(args[j + 1]);
 
             if (seen_fields.find(k) != seen_fields.end())
             {
@@ -1900,7 +1916,7 @@ namespace didx509
           }
 
           const std::string fulcio_oid("1.3.6.1.4.1.57264.1.1");
-          auto decoded_arg = url_unescape(args[0]);
+          auto decoded_arg = decode_scalar(args[0]);
           auto fulcio_issuer = "https://" + decoded_arg;
 
           bool found = false;
@@ -2059,6 +2075,20 @@ namespace didx509
     roots.emplace_back(std::move(root));
 
     auto valid_chain = chain.verify(roots, ignore_time);
+    // Do not let path building discard evidence before eager extension checks.
+    if (chain.size() != valid_chain.size())
+    {
+      throw std::runtime_error(
+        "supplied certificate chain does not match the verified chain");
+    }
+    for (size_t i = 0; i < chain.size(); i++)
+    {
+      if (chain.at(i).der() != valid_chain.at(i).der())
+      {
+        throw std::runtime_error(
+          "supplied certificate chain does not match the verified chain");
+      }
+    }
     verify(valid_chain, did_document_id(did));
 
     return valid_chain;

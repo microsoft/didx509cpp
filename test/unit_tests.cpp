@@ -21,6 +21,7 @@
 #include <stdexcept>
 #include <string>
 #include <string_view>
+#include <utility>
 #include <vector>
 
 #if defined(OPENSSL_VERSION_MAJOR) && OPENSSL_VERSION_MAJOR >= 3
@@ -1078,6 +1079,179 @@ TEST_CASE("Registered OtherName SANs on CAs are decoded eagerly")
   test_resolve_jwk_error(split_x509_cert_bundle(pem), did, "primitive DER");
   REQUIRE_THROWS_WITH(
     (void)resolve_chain(chain, did, true), doctest::Contains("primitive DER"));
+}
+
+TEST_CASE("Existing SAN types require strict nonempty UTF8 scalars")
+{
+  const auto pem = load_certificate_chain("san-scalar-syntax.pem");
+  const auto pems = split_x509_cert_bundle(pem);
+  const UqSTACK_OF_X509 chain(pems);
+  const auto base =
+    "did:x509:0:sha256:" + to_base64url(sha256(chain.back().der()));
+  const std::vector<std::pair<std::string, std::string>> cases = {
+    {"dns", "literal%25GG.example.com"},
+    {"email", "literal%25GG%40example.com"},
+    {"uri", "urn%3Aliteral%25GG"}};
+  for (const auto& entry : cases)
+  {
+    SUBCASE(entry.first.c_str())
+    {
+      const auto prefix = base + "::san:" + entry.first + ":";
+      test_resolve_success(pem, prefix + entry.second);
+      auto malformed = entry.second;
+      const auto percent = malformed.find("%25");
+      REQUIRE(percent != std::string::npos);
+      malformed.replace(percent, 3, "%");
+      for (const auto& encoded : {malformed, std::string{}})
+      {
+        const auto did = prefix + encoded;
+        test_resolve_error(pem, did, "percent-encoded");
+        test_resolve_jwk_error(pems, did, "percent-encoded");
+        REQUIRE_THROWS_WITH(
+          (void)resolve_chain(chain, did, true),
+          doctest::Contains("percent-encoded"));
+      }
+      const auto did = prefix + "%FF";
+      test_resolve_error(pem, did, "not valid UTF-8");
+      test_resolve_jwk_error(pems, did, "not valid UTF-8");
+      REQUIRE_THROWS_WITH(
+        (void)resolve_chain(chain, did, true),
+        doctest::Contains("not valid UTF-8"));
+    }
+  }
+}
+
+TEST_CASE("Subject and legacy issuer scalars use the same strict decoding")
+{
+  const auto pem = load_certificate_chain("san-scalar-syntax.pem");
+  const auto pems = split_x509_cert_bundle(pem);
+  const UqSTACK_OF_X509 chain(pems);
+  const auto base =
+    "did:x509:0:sha256:" + to_base64url(sha256(chain.back().der()));
+  const std::vector<std::pair<std::string, std::string>> cases = {
+    {"subject:CN:", "literal%25GG"},
+    {"fulcio-issuer:", "literal%25GG.example.com"}};
+  for (const auto& entry : cases)
+  {
+    SUBCASE(entry.first.c_str())
+    {
+      const auto prefix = base + "::" + entry.first;
+      test_resolve_success(pem, prefix + entry.second);
+      auto malformed = entry.second;
+      malformed.replace(malformed.find("%25"), 3, "%");
+      const auto did = prefix + malformed;
+      test_resolve_error(pem, did, "percent-encoded");
+      test_resolve_jwk_error(pems, did, "percent-encoded");
+      REQUIRE_THROWS_WITH(
+        (void)resolve_chain(chain, did, true),
+        doctest::Contains("percent-encoded"));
+    }
+  }
+}
+
+TEST_CASE(
+  "DID URL paths and queries fail while encoded values and fragments work")
+{
+  const auto pem = load_certificate_chain("san-scalar-syntax.pem");
+  const auto pems = split_x509_cert_bundle(pem);
+  const UqSTACK_OF_X509 chain(pems);
+  const auto base =
+    "did:x509:0:sha256:" + to_base64url(sha256(chain.back().der()));
+  const std::string uri =
+    "::san:uri:https%3A%2F%2Fexample.com%2Fuser%3Fkey%3Dvalue";
+  test_resolve_success(pem, base + uri);
+  test_resolve_success(pem, base + uri + "#requested/path?query");
+  const std::vector<std::pair<std::string, std::string>> cases = {
+    {"::san:uri:https%3A%2F%2Fexample.com/user%3Fkey%3Dvalue", "DID URL paths"},
+    {"::san:uri:https%3A%2F%2Fexample.com%2Fuser?key%3Dvalue",
+     "DID URL queries"}};
+  for (const auto& entry : cases)
+  {
+    SUBCASE(entry.second.c_str())
+    {
+      const auto did = base + entry.first + "#requested/path?query";
+      const char* const error =
+        entry.second == "DID URL paths" ? "DID URL paths" : "DID URL queries";
+      test_resolve_error(pem, did, error);
+      test_resolve_jwk_error(pems, did, error);
+      REQUIRE_THROWS_WITH(
+        (void)resolve_chain(chain, did, true), doctest::Contains(error));
+    }
+  }
+}
+
+TEST_CASE("DID prefix requires exactly the specified components")
+{
+  const auto pem = load_certificate_chain("fulcio-othername.pem");
+  const auto pems = split_x509_cert_bundle(pem);
+  const UqSTACK_OF_X509 chain(pems);
+  const auto did =
+    "did:x509:0:sha256:" + to_base64url(sha256(chain.back().der())) +
+    ":extra::san:othername:1.3.6.1.4.1.57264.1.7:alice%21example.com";
+  test_resolve_error(pem, did, "unsupported method");
+  test_resolve_jwk_error(pems, did, "unsupported method");
+  REQUIRE_THROWS_WITH(
+    (void)resolve_chain(chain, did, true),
+    doctest::Contains("unsupported method"));
+}
+
+TEST_CASE("Path building cannot discard malformed or duplicated chain evidence")
+{
+  const auto good =
+    split_x509_cert_bundle(load_certificate_chain("fulcio-othername.pem"));
+  const auto bad = split_x509_cert_bundle(
+    load_certificate_chain("fulcio-ca-othername-invalid.pem"));
+  const UqSTACK_OF_X509 good_chain(good);
+  const auto did =
+    "did:x509:0:sha256:" + to_base64url(sha256(good_chain.back().der())) +
+    "::san:othername:1.3.6.1.4.1.57264.1.7:alice%21example.com";
+  const std::vector<std::vector<std::string>> cases = {
+    {good[0], bad[1], good[1]}, {good[0], good[1], good[1]}};
+  for (const auto& pems : cases)
+  {
+    const UqSTACK_OF_X509 chain(pems);
+    std::vector<UqX509> roots;
+    roots.emplace_back(chain.back());
+    UqSTACK_OF_X509 verified;
+    REQUIRE_NOTHROW(verified = chain.verify(roots, true));
+    REQUIRE(verified.size() == 2);
+    REQUIRE(chain.size() == 3);
+    std::string pem;
+    for (const auto& cert : pems)
+    {
+      pem += cert + "\n";
+    }
+    test_resolve_error(pem, did, "verified chain");
+    test_resolve_jwk_error(pems, did, "verified chain");
+    REQUIRE_THROWS_WITH(
+      (void)resolve_chain(chain, did, true),
+      doctest::Contains("verified chain"));
+  }
+}
+
+TEST_CASE("Malformed IA5 SANs fail eagerly even beside a valid OtherName match")
+{
+  const std::vector<std::string> cases = {
+    "san-nonascii-dns.pem", "san-nonascii-email.pem", "san-nonascii-uri.pem"};
+  for (const auto& path : cases)
+  {
+    SUBCASE(path.c_str())
+    {
+      const auto pem = load_certificate_chain(path);
+      const auto pems = split_x509_cert_bundle(pem);
+      const UqSTACK_OF_X509 chain(pems);
+      std::vector<UqX509> roots;
+      roots.emplace_back(chain.back());
+      REQUIRE_NOTHROW((void)chain.verify(roots, true));
+      const auto did =
+        "did:x509:0:sha256:" + to_base64url(sha256(chain.back().der())) +
+        "::san:othername:1.3.6.1.4.1.57264.1.7:alice%21example.com";
+      test_resolve_error(pem, did, "IA5String");
+      test_resolve_jwk_error(pems, did, "IA5String");
+      REQUIRE_THROWS_WITH(
+        (void)resolve_chain(chain, did, true), doctest::Contains("IA5String"));
+    }
+  }
 }
 
 TEST_CASE("TestEcJwkCoordinatePadding")
