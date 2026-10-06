@@ -32,17 +32,26 @@ OtherName predicates through all three public resolution APIs. Its SAN contains
 Alice and Bob identities plus a duplicate Alice entry. The leaf has independent,
 different legacy and V2 issuers and a Token Subject that differs from its SAN.
 The root-only deployment-environment field must never supply a leaf match.
+The opaque runner-environment value "opaque%GG" must match "opaque%25GG", but
+never a selector containing the malformed escape "opaque%GG".
 
-fulcio-othername.cnf contains its extension definitions. To regenerate the public
-fixture, use an ignored build/fulcio-fixture directory from the repository root:
+fulcio-ca-othername-invalid.pem uses the same valid leaf and a separately signed
+root certificate with the registered .7 OtherName encoded as an IA5String rather
+than a UTF8String. Its X.509 path is valid, but every resolution API must reject
+the unselected CA SAN eagerly.
+
+fulcio-othername.cnf contains both fixture profiles. To regenerate the public
+fixtures, use an ignored build/fulcio-fixture directory from the repository root:
 
   mkdir -p build/fulcio-fixture
   openssl genpkey -algorithm EC -pkeyopt ec_paramgen_curve:P-256 -out build/fulcio-fixture/root.key
   openssl req -new -x509 -key build/fulcio-fixture/root.key -subj "/CN=didx509cpp OtherName Test Root" -set_serial 1 -days 3650 -config test/test-data/fulcio-othername.cnf -extensions root -out build/fulcio-fixture/root.pem
+  openssl req -new -x509 -key build/fulcio-fixture/root.key -subj "/CN=didx509cpp OtherName Test Root" -set_serial 3 -days 3650 -config test/test-data/fulcio-othername.cnf -extensions root-malformed-othername -out build/fulcio-fixture/root-invalid-othername.pem
   openssl genpkey -algorithm EC -pkeyopt ec_paramgen_curve:P-256 -out build/fulcio-fixture/leaf.key
   openssl req -new -key build/fulcio-fixture/leaf.key -subj "/CN=didx509cpp OtherName Test Leaf" -out build/fulcio-fixture/leaf.csr
   openssl x509 -req -in build/fulcio-fixture/leaf.csr -CA build/fulcio-fixture/root.pem -CAkey build/fulcio-fixture/root.key -set_serial 2 -days 3650 -extfile test/test-data/fulcio-othername.cnf -extensions leaf -out build/fulcio-fixture/leaf.pem
   cat build/fulcio-fixture/leaf.pem build/fulcio-fixture/root.pem > test/test-data/fulcio-othername.pem
+  cat build/fulcio-fixture/leaf.pem build/fulcio-fixture/root-invalid-othername.pem > test/test-data/fulcio-ca-othername-invalid.pem
 
 Remove the generated private keys and intermediate files after regeneration;
 only the public certificate bundle belongs in source control.

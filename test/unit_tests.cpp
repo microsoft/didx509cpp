@@ -106,6 +106,8 @@ void test_resolve_success(const std::string& chain, const std::string& did)
   
   std::string jwk;
   const auto split_chain = split_x509_cert_bundle(chain);
+  const UqSTACK_OF_X509 parsed_chain(split_chain);
+  REQUIRE_NOTHROW((void)resolve_chain(parsed_chain, did, true));
   REQUIRE_NOTHROW(jwk = resolve_jwk(split_chain, did, true));
   // Verify that resolved JWK is valid JSON
   nlohmann::json jwk_doc;
@@ -943,6 +945,21 @@ TEST_CASE("OtherName explicit wrappers must be well formed")
   }
 }
 
+TEST_CASE("Duplicate SAN extensions fail without breaking move ownership")
+{
+  const auto pem =
+    split_x509_cert_bundle(load_certificate_chain("ms-code-signing.pem"))
+      .front();
+  const UqX509 cert(pem);
+  const auto ext = raw_extension(
+    "2.5.29.17",
+    der_tlv(0x30, othername_der(der_tlv(0x0c, "alice!example.com"))));
+  CHECK1(X509_add_ext(cert, ext, -1));
+  CHECK1(X509_add_ext(cert, ext, -1));
+  REQUIRE_THROWS_WITH(
+    (void)cert.subject_alternative_name(), "duplicate SAN extension");
+}
+
 TEST_CASE("Every registered Fulcio field is decoded eagerly")
 {
   REQUIRE(fulcio_extension_oids().size() == 17);
@@ -1004,6 +1021,7 @@ TEST_CASE("Fulcio and OtherName predicates through document and JWK resolution")
   const std::string legacy = "::fulcio-issuer:legacy.example.com";
 
   test_resolve_success(pem, base + alice);
+  test_resolve_success(pem, base + v2 + v2);
   test_resolve_success(pem, base + alice + "#requested");
   test_resolve_success(
     pem, base + "::fulcio:issuer:https%3a%2f%2fv2.example.com#requested");
@@ -1029,6 +1047,38 @@ TEST_CASE("Fulcio and OtherName predicates through document and JWK resolution")
     base + "::fulcio:deployment-environment:root-only", // NOLINT(clang-analyzer-cplusplus.NewDeleteLeaks)
     "Fulcio extension not found"); // NOLINT(clang-analyzer-cplusplus.NewDeleteLeaks)
 } // NOLINT(clang-analyzer-cplusplus.NewDeleteLeaks)
+
+TEST_CASE("Malformed percent escapes cannot match literal Fulcio values")
+{
+  const auto pem = load_certificate_chain("fulcio-othername.pem");
+  const UqSTACK_OF_X509 chain(pem);
+  const auto base =
+    "did:x509:0:sha256:" + to_base64url(sha256(chain.back().der()));
+  test_resolve_success(pem, base + "::fulcio:runner-environment:opaque%25GG");
+  const auto did = base + "::fulcio:runner-environment:opaque%GG";
+  test_resolve_error(pem, did, "invalid percent-encoded");
+  test_resolve_jwk_error(
+    split_x509_cert_bundle(pem), did, "invalid percent-encoded");
+  REQUIRE_THROWS_WITH(
+    (void)resolve_chain(chain, did, true),
+    doctest::Contains("invalid percent-encoded"));
+}
+
+TEST_CASE("Registered OtherName SANs on CAs are decoded eagerly")
+{
+  const auto pem = load_certificate_chain("fulcio-ca-othername-invalid.pem");
+  const UqSTACK_OF_X509 chain(pem);
+  std::vector<UqX509> roots;
+  roots.emplace_back(chain.back());
+  REQUIRE_NOTHROW((void)chain.verify(roots, true));
+  const auto did =
+    "did:x509:0:sha256:" + to_base64url(sha256(chain.back().der())) +
+    "::san:othername:1.3.6.1.4.1.57264.1.7:alice%21example.com";
+  test_resolve_error(pem, did, "primitive DER");
+  test_resolve_jwk_error(split_x509_cert_bundle(pem), did, "primitive DER");
+  REQUIRE_THROWS_WITH(
+    (void)resolve_chain(chain, did, true), doctest::Contains("primitive DER"));
+}
 
 TEST_CASE("TestEcJwkCoordinatePadding")
 {
