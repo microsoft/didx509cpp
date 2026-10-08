@@ -753,12 +753,12 @@ TEST_CASE("to_base64 and to_base64url empty input")
 TEST_CASE("TestEd25519Resolution")
 {
   const std::string did =
-    "did:x509:0:sha256:rvfePvIk3N01PY306CKqdj4i5wQtD9aygwbQ_rJ1HTg"
+    "did:x509:0:sha256:_hPkzgx8FRjMo-VtFRP8OGW-en90b7Z0tXnbCiR7sJE"
     "::subject:CN:didx509cpp%20Ed25519%20Test%20Leaf";
   const nlohmann::json expected_jwk = {
     {"kty", "OKP"},
     {"crv", "Ed25519"},
-    {"x", "ADEwg3nXsq7_nUiveRFfV_M48nmY6CNDNd_pwKUfiMk"}};
+    {"x", "AEPfvONHCoKhZDH4l1mi4jOEQ0BQEDNtKgRe8WvO8VI"}};
 
   for (const auto* fixture : // NOLINT(clang-analyzer-cplusplus.NewDeleteLeaks)
        {"ed25519.pem",
@@ -795,7 +795,7 @@ TEST_CASE("TestEd25519Resolution")
 TEST_CASE("TestEd25519InvalidKeyUsage")
 {
   const std::string did =
-    "did:x509:0:sha256:rvfePvIk3N01PY306CKqdj4i5wQtD9aygwbQ_rJ1HTg"
+    "did:x509:0:sha256:_hPkzgx8FRjMo-VtFRP8OGW-en90b7Z0tXnbCiR7sJE"
     "::subject:CN:didx509cpp%20Ed25519%20Test%20Leaf";
 
   for (const auto* fixture : // NOLINT(clang-analyzer-cplusplus.NewDeleteLeaks)
@@ -807,6 +807,22 @@ TEST_CASE("TestEd25519InvalidKeyUsage")
     const auto chain = load_certificate_chain(fixture);
     const auto* error =
       "Ed25519 certificate key usage must not include key agreement";
+    test_resolve_error(chain, did, error);
+    test_resolve_jwk_error(split_x509_cert_bundle(chain), did, error); // NOLINT(clang-analyzer-cplusplus.NewDeleteLeaks)
+  }
+
+  // All of these also carry digitalSignature, so the encipherment bit alone
+  // is what causes the rejection.
+  for (const auto* fixture : // NOLINT(clang-analyzer-cplusplus.NewDeleteLeaks)
+       {"ed25519-key-encipherment.pem",
+        "ed25519-data-encipherment.pem",
+        "ed25519-encipher-decipher-only.pem"})
+  {
+    const std::string fixture_name = fixture;
+    CAPTURE(fixture_name);
+    const auto chain = load_certificate_chain(fixture);
+    const auto* error =
+      "Ed25519 certificate key usage must not include encipherment";
     test_resolve_error(chain, did, error);
     test_resolve_jwk_error(split_x509_cert_bundle(chain), did, error); // NOLINT(clang-analyzer-cplusplus.NewDeleteLeaks)
   }

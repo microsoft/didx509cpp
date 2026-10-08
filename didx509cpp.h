@@ -586,6 +586,14 @@ namespace didx509
           (X509_get_key_usage(*this) & KU_KEY_AGREEMENT) != 0;
       }
 
+      [[nodiscard]] bool has_key_usage_encipherment() const
+      {
+        return has_key_usage() &&
+          (X509_get_key_usage(*this) &
+           (KU_KEY_ENCIPHERMENT | KU_DATA_ENCIPHERMENT | KU_ENCIPHER_ONLY |
+            KU_DECIPHER_ONLY)) != 0;
+      }
+
       [[nodiscard]] bool has_common_name(const std::string& expected_name) const;
 
       [[nodiscard]] std::map<std::string, std::vector<std::string>> subject() const
@@ -1614,10 +1622,18 @@ namespace didx509
 #ifdef EVP_PKEY_ED25519
       if (EVP_PKEY_base_id(cert.public_key()) == EVP_PKEY_ED25519)
       {
+        // RFC 8410 section 5: an Ed25519 end-entity key usage may only
+        // contain digitalSignature and nonRepudiation. Key agreement and
+        // encipherment usages are reserved for X25519 and X448 keys.
         if (cert.has_key_usage_key_agreement())
         {
           throw std::runtime_error(
             "Ed25519 certificate key usage must not include key agreement");
+        }
+        if (cert.has_key_usage_encipherment())
+        {
+          throw std::runtime_error(
+            "Ed25519 certificate key usage must not include encipherment");
         }
         if (!include_assertion_method)
         {

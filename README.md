@@ -35,9 +35,11 @@ Ed25519 requires OpenSSL 1.1.1 or newer and is exported as an
 
 Ed25519 keys are signing-only: the DID document includes `assertionMethod`,
 never `keyAgreement`. If the leaf certificate has a Key Usage extension, it
-must include `digitalSignature` and must not include `keyAgreement`. Without
-Key Usage, the key is still treated as signing-only. RSA and EC behavior is
-unchanged.
+must include `digitalSignature` and, following
+[RFC 8410 section 5](https://www.rfc-editor.org/rfc/rfc8410#section-5), must
+not include `keyAgreement`, `keyEncipherment`, `dataEncipherment`,
+`encipherOnly`, or `decipherOnly`. Without Key Usage, the key is still treated
+as signing-only. RSA and EC behavior is unchanged.
 
 ## Contributing
 
