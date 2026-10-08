@@ -931,6 +931,25 @@ namespace didx509
             r += R"("y":")" + to_base64url(yv) + R"(")";
             break;
           }
+#ifdef EVP_PKEY_ED25519
+          case EVP_PKEY_ED25519: {
+            std::vector<uint8_t> raw_key(32);
+            size_t raw_key_size = raw_key.size();
+            if (
+              EVP_PKEY_get_raw_public_key(pk, raw_key.data(), &raw_key_size) !=
+              1)
+            {
+              throw std::runtime_error("Ed25519 public key extraction failed");
+            }
+            if (raw_key_size != raw_key.size())
+            {
+              throw std::runtime_error("invalid Ed25519 public key size");
+            }
+            r += R"("kty":"OKP","crv":"Ed25519","x":")" +
+              to_base64url(raw_key) + R"(")";
+            break;
+          }
+#endif
           default:
             throw std::runtime_error("unsupported key base id");
         }
@@ -1592,6 +1611,22 @@ namespace didx509
     {
       const bool include_assertion_method =
         !cert.has_key_usage() || cert.has_key_usage_digital_signature();
+#ifdef EVP_PKEY_ED25519
+      if (EVP_PKEY_base_id(cert.public_key()) == EVP_PKEY_ED25519)
+      {
+        if (cert.has_key_usage_key_agreement())
+        {
+          throw std::runtime_error(
+            "Ed25519 certificate key usage must not include key agreement");
+        }
+        if (!include_assertion_method)
+        {
+          throw std::runtime_error(
+            "Ed25519 certificate key usage must include digital signature");
+        }
+        return {true, false};
+      }
+#endif
       const bool include_key_agreement =
         !cert.has_key_usage() || cert.has_key_usage_key_agreement();
       if (!include_assertion_method && !include_key_agreement)

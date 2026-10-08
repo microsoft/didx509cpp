@@ -26,6 +26,19 @@ try {
 {...}
 ```
 
+## Supported public keys
+
+The resolver exports RSA, EC (P-256, P-384, and P-521), and Ed25519 public keys.
+Ed25519 requires OpenSSL 1.1.1 or newer and is exported as an
+[RFC 8037](https://www.rfc-editor.org/rfc/rfc8037) JWK with `kty: "OKP"`,
+`crv: "Ed25519"`, and the base64url-encoded 32-byte public key in `x`.
+
+Ed25519 keys are signing-only: the DID document includes `assertionMethod`,
+never `keyAgreement`. If the leaf certificate has a Key Usage extension, it
+must include `digitalSignature` and must not include `keyAgreement`. Without
+Key Usage, the key is still treated as signing-only. RSA and EC behavior is
+unchanged.
+
 ## Contributing
 
 To run clang-tidy locally, configure with Clang 18 and enable the opt-in
