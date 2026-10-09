@@ -26,6 +26,14 @@ jobs:
     - name: Checkout repository
       uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
+    - name: Install packages
+      run: |
+        sudo apt update
+        sudo apt install build-essential perl doctest-dev libcurl4-openssl-dev
+
+    - name: Set up OpenSSL
+      uses: ./.github/actions/setup-openssl
+
     - name: Initialize CodeQL
       uses: github/codeql-action/init@2892aa5e19bbd11bc0cff5427e3b750a04d9e3c2 # v4.38.2
       with:
@@ -35,11 +43,6 @@ jobs:
         # By default, queries listed here will override any specified in a config file.
         # Prefix the list here with "+" to use these queries and those in the config file.
         # queries: ./path/to/local/query, your-org/your-repo/queries@main
-
-    - name: Install packages
-      run: |
-        sudo apt update
-        sudo apt install doctest-dev libcurl4-openssl-dev libssl-dev
 
     - name: Create Build Environment
       run: cmake -E make_directory ${{github.workspace}}/build/${{ matrix.build_type }}

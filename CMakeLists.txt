@@ -1,6 +1,6 @@
 # Copyright (c) Microsoft Corporation.
 # Licensed under the MIT License.
-cmake_minimum_required(VERSION 3.16)
+cmake_minimum_required(VERSION 3.18)
 
 project(didx509cpp LANGUAGES CXX C ASM)
 
@@ -19,9 +19,9 @@ install(TARGETS didx509cpp)
 
 set(CMAKE_FIND_LIBRARY_SUFFIXES ".a" ".so")
 
-find_package(OpenSSL)
+find_package(OpenSSL 3.3 REQUIRED COMPONENTS Crypto)
 target_compile_definitions(didx509cpp INTERFACE HAVE_OPENSSL)
-target_link_libraries(didx509cpp INTERFACE crypto)
+target_link_libraries(didx509cpp INTERFACE OpenSSL::Crypto)
 
 if(CLANG_TIDY)
   find_program(

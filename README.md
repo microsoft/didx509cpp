@@ -5,6 +5,16 @@ The method is [registered within the W3C DID Extensions registry](https://github
 
 [![Continuous Integration](https://github.com/microsoft/didx509cpp/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/microsoft/didx509cpp/actions/workflows/ci.yml) [![CodeQL](https://github.com/microsoft/didx509cpp/actions/workflows/codeql-analysis.yml/badge.svg?branch=main)](https://github.com/microsoft/didx509cpp/actions/workflows/codeql-analysis.yml)
 
+## Requirements
+
+- C++20.
+- OpenSSL 3.3 or newer, including development headers and `libcrypto`.
+  Older OpenSSL versions are not supported.
+- CMake 3.18 or newer for CMake-based builds.
+
+For a non-system OpenSSL installation, pass `-DOPENSSL_ROOT_DIR=<prefix>` when
+configuring CMake.
+
 ## Usage
 
 ```cpp
@@ -25,6 +35,51 @@ try {
 } catch (...)
 {...}
 ```
+
+## Fulcio identities
+
+The method-version-`0` `fulcio` predicate selects a registered standalone
+Fulcio extension on the leaf certificate. For Issuer V2 (`1.3.6.1.4.1.57264.1.8`),
+use the full percent-encoded issuer, including its scheme:
+
+```text
+::fulcio:issuer:https%3A%2F%2Ftoken.actions.githubusercontent.com
+```
+
+All 17 [registered fields](https://github.com/microsoft/did-x509/blob/main/specification.md#standalone-fulcio-extension-registry)
+are supported, including source/build metadata, `deployment-environment`, and
+`token-subject`. Each predicate requires exactly one literal field and one
+nonempty percent-encoded UTF-8 value. Multiple predicates are ANDed.
+
+Fulcio username identities use the registered OtherName type inside the SAN
+extension, independently of standalone Fulcio extensions:
+
+```text
+::san:othername:1.3.6.1.4.1.57264.1.7:alice%21example.com
+```
+
+The type OID must be literal, and the complete username SAN (`alice!example.com`
+here) is compared exactly, not reconstructed from `token-subject`. Scalar values
+are decoded once, without case folding, URI rewriting, or Unicode normalization.
+
+The existing `fulcio-issuer` predicate still selects only the legacy raw UTF-8
+extension `.1`, with `https://` omitted from the predicate value. It never falls
+back to `.8`, and `fulcio:issuer` never falls back to `.1`. Existing DID Document
+and JWK formats are unchanged. DID URL fragments are excluded from predicate
+matching and document IDs; percent-escape spelling in the DID is preserved.
+DID URL paths and queries are rejected. Slash and question-mark characters in
+identity values must be percent-encoded; they remain permitted inside fragments.
+All scalar predicates, including existing SAN, subject, and legacy issuer forms,
+require nonempty, correctly percent-encoded UTF-8 values.
+
+Registered OtherName values and standalone `.8`-`.24` extensions require a
+complete, minimally encoded DER UTF8String. Malformed or unsupported SAN entries
+and malformed registered Fulcio extensions fail resolution even when unselected
+or present on a CA certificate. Standalone Fulcio extensions must be noncritical;
+normal certificate path validation is not bypassed.
+Email, DNS, and URI SANs must contain valid ASCII IA5Strings. The supplied
+certificates must match the verified leaf-first chain exactly, so path building
+cannot silently discard malformed or duplicate evidence.
 
 ## Contributing
 

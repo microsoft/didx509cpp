@@ -29,7 +29,7 @@ jobs:
       - name: Install packages
         run: |
           sudo apt update
-          sudo apt install libcurl4-openssl-dev libssl-dev
+          sudo apt install build-essential perl libcurl4-openssl-dev
 
       - name: Install clang 15
         if: matrix.compiler == 'clang++-15'
@@ -40,6 +40,9 @@ jobs:
         run: sudo apt install clang-18
 
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Set up OpenSSL
+        uses: ./.github/actions/setup-openssl
 
       - name: Create Build Environment
         run: cmake -E make_directory build/${{ matrix.build_type }}
@@ -68,9 +71,12 @@ jobs:
       - name: Install packages
         run: |
           sudo apt update
-          sudo apt install clang-18 clang-tidy-18 libcurl4-openssl-dev libssl-dev
+          sudo apt install build-essential perl clang-18 clang-tidy-18 libcurl4-openssl-dev
 
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Set up OpenSSL
+        uses: ./.github/actions/setup-openssl
 
       - name: Configure CMake
         run: |
