@@ -39,7 +39,11 @@ must include `digitalSignature` and, following
 [RFC 8410 section 5](https://www.rfc-editor.org/rfc/rfc8410#section-5), must
 not include `keyAgreement`, `keyEncipherment`, `dataEncipherment`,
 `encipherOnly`, or `decipherOnly`. Without Key Usage, the key is still treated
-as signing-only. RSA and EC behavior is unchanged.
+as signing-only.
+
+RSA and EC keys include `assertionMethod` when Key Usage is absent or includes
+`digitalSignature`, and `keyAgreement` when Key Usage is absent or includes
+`keyAgreement`. A Key Usage extension with neither is rejected.
 
 ## Contributing
 

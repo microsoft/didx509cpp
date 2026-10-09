@@ -941,13 +941,16 @@ namespace didx509
           }
 #ifdef EVP_PKEY_ED25519
           case EVP_PKEY_ED25519: {
+            // RFC 8032 section 5.1.5: Ed25519 public keys are 32 octets.
             std::vector<uint8_t> raw_key(32);
             size_t raw_key_size = raw_key.size();
             if (
               EVP_PKEY_get_raw_public_key(pk, raw_key.data(), &raw_key_size) !=
               1)
             {
-              throw std::runtime_error("Ed25519 public key extraction failed");
+              throw std::runtime_error(
+                "Ed25519 public key extraction failed: " +
+                error_string(ERR_get_error()));
             }
             if (raw_key_size != raw_key.size())
             {
@@ -1624,7 +1627,7 @@ namespace didx509
       {
         // RFC 8410 section 5: an Ed25519 end-entity key usage may only
         // contain digitalSignature and nonRepudiation. Key agreement and
-        // encipherment usages are reserved for X25519 and X448 keys.
+        // encipherment usages do not apply to EdDSA keys.
         if (cert.has_key_usage_key_agreement())
         {
           throw std::runtime_error(

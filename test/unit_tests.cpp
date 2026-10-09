@@ -761,9 +761,7 @@ TEST_CASE("TestEd25519Resolution")
     {"x", "AEPfvONHCoKhZDH4l1mi4jOEQ0BQEDNtKgRe8WvO8VI"}};
 
   for (const auto* fixture : // NOLINT(clang-analyzer-cplusplus.NewDeleteLeaks)
-       {"ed25519.pem",
-        "ed25519-no-key-usage.pem",
-        "ed25519-mixed-chain.pem"})
+       {"ed25519.pem", "ed25519-no-key-usage.pem", "ed25519-mixed-chain.pem"})
   {
     const std::string fixture_name = fixture;
     CAPTURE(fixture_name);
@@ -799,8 +797,7 @@ TEST_CASE("TestEd25519InvalidKeyUsage")
     "::subject:CN:didx509cpp%20Ed25519%20Test%20Leaf";
 
   for (const auto* fixture : // NOLINT(clang-analyzer-cplusplus.NewDeleteLeaks)
-       {"ed25519-key-agreement.pem",
-        "ed25519-signature-and-key-agreement.pem"})
+       {"ed25519-key-agreement.pem", "ed25519-signature-and-key-agreement.pem"})
   {
     const std::string fixture_name = fixture;
     CAPTURE(fixture_name);
