@@ -5,6 +5,10 @@ The method is [registered within the W3C DID Extensions registry](https://github
 
 [![Continuous Integration](https://github.com/microsoft/didx509cpp/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/microsoft/didx509cpp/actions/workflows/ci.yml) [![CodeQL](https://github.com/microsoft/didx509cpp/actions/workflows/codeql-analysis.yml/badge.svg?branch=main)](https://github.com/microsoft/didx509cpp/actions/workflows/codeql-analysis.yml)
 
+## Requirements
+
+A C++20 compiler and OpenSSL 3.3 or newer.
+
 ## Usage
 
 ```cpp
@@ -25,6 +29,29 @@ try {
 } catch (...)
 {...}
 ```
+
+## Supported public keys
+
+The resolver exports RSA, EC (P-256, P-384, and P-521), and Ed25519 public keys.
+Ed25519 keys are exported as an
+[RFC 8037](https://www.rfc-editor.org/rfc/rfc8037) JWK with `kty: "OKP"`,
+`crv: "Ed25519"`, and the base64url-encoded 32-byte public key in `x`. The
+encoding must be canonical per
+[RFC 8032 section 5.1.3](https://www.rfc-editor.org/rfc/rfc8032#section-5.1.3):
+a key whose y-coordinate is not less than the field prime is rejected, even
+though OpenSSL accepts it.
+
+Ed25519 keys are signing-only: the DID document includes `assertionMethod`,
+never `keyAgreement`. If the leaf certificate has a Key Usage extension, it
+must include `digitalSignature` and, following
+[RFC 8410 section 5](https://www.rfc-editor.org/rfc/rfc8410#section-5), must
+not include `keyAgreement`, `keyEncipherment`, `dataEncipherment`,
+`encipherOnly`, or `decipherOnly`. Without Key Usage, the key is still treated
+as signing-only.
+
+RSA and EC keys include `assertionMethod` when Key Usage is absent or includes
+`digitalSignature`, and `keyAgreement` when Key Usage is absent or includes
+`keyAgreement`. A Key Usage extension with neither is rejected.
 
 ## Contributing
 

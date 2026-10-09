@@ -748,6 +748,101 @@ TEST_CASE("to_base64 and to_base64url empty input")
   CHECK(to_base64({}) == "");
   CHECK(to_base64url({}) == "");
 }
+
+TEST_CASE("TestEd25519Resolution")
+{
+  const std::string did =
+    "did:x509:0:sha256:_hPkzgx8FRjMo-VtFRP8OGW-en90b7Z0tXnbCiR7sJE"
+    "::subject:CN:didx509cpp%20Ed25519%20Test%20Leaf";
+  const nlohmann::json expected_jwk = {
+    {"kty", "OKP"},
+    {"crv", "Ed25519"},
+    {"x", "AEPfvONHCoKhZDH4l1mi4jOEQ0BQEDNtKgRe8WvO8VI"}};
+
+  for (const auto* fixture : // NOLINT(clang-analyzer-cplusplus.NewDeleteLeaks)
+       {"ed25519.pem", "ed25519-no-key-usage.pem", "ed25519-mixed-chain.pem"})
+  {
+    const std::string fixture_name = fixture;
+    CAPTURE(fixture_name);
+    const auto chain_pem = load_certificate_chain(fixture);
+    const UqSTACK_OF_X509 chain(chain_pem);
+    const auto valid_chain = resolve_chain(chain, did, true);
+    const auto leaf = valid_chain.front();
+    CHECK(EVP_PKEY_base_id(leaf.public_key()) == EVP_PKEY_ED25519);
+    CHECK(
+      leaf.has_key_usage() ==
+      (std::string_view(fixture) != "ed25519-no-key-usage.pem"));
+    CHECK(nlohmann::json::parse(leaf.public_jwk()) == expected_jwk);
+
+    test_resolve_success(chain_pem, did);
+    const auto doc = nlohmann::json::parse(resolve(chain_pem, did, true));
+    CHECK(doc["verificationMethod"][0]["publicKeyJwk"] == expected_jwk);
+    CHECK(doc["assertionMethod"] == nlohmann::json::array({did + "#0"}));
+    CHECK_FALSE(doc.contains("keyAgreement"));
+
+    const auto jwk = nlohmann::json::parse(
+      resolve_jwk(split_x509_cert_bundle(chain_pem), did, true));
+    CHECK(jwk == expected_jwk);
+    const auto raw_key = base64url_decode(jwk["x"].get<std::string>());
+    REQUIRE(raw_key.size() == 32);
+    CHECK(raw_key.front() == 0x00);
+  }
+}
+
+TEST_CASE("TestEd25519InvalidKeyUsage")
+{
+  const std::string did =
+    "did:x509:0:sha256:_hPkzgx8FRjMo-VtFRP8OGW-en90b7Z0tXnbCiR7sJE"
+    "::subject:CN:didx509cpp%20Ed25519%20Test%20Leaf";
+
+  for (const auto* fixture : // NOLINT(clang-analyzer-cplusplus.NewDeleteLeaks)
+       {"ed25519-key-agreement.pem", "ed25519-signature-and-key-agreement.pem"})
+  {
+    const std::string fixture_name = fixture;
+    CAPTURE(fixture_name);
+    const auto chain = load_certificate_chain(fixture);
+    const auto* error =
+      "Ed25519 certificate key usage must not include key agreement";
+    test_resolve_error(chain, did, error);
+    test_resolve_jwk_error(split_x509_cert_bundle(chain), did, error); // NOLINT(clang-analyzer-cplusplus.NewDeleteLeaks)
+  }
+
+  // All of these also carry digitalSignature, so the encipherment bit alone
+  // is what causes the rejection.
+  for (const auto* fixture : // NOLINT(clang-analyzer-cplusplus.NewDeleteLeaks)
+       {"ed25519-key-encipherment.pem",
+        "ed25519-data-encipherment.pem",
+        "ed25519-encipher-decipher-only.pem"})
+  {
+    const std::string fixture_name = fixture;
+    CAPTURE(fixture_name);
+    const auto chain = load_certificate_chain(fixture);
+    const auto* error =
+      "Ed25519 certificate key usage must not include encipherment";
+    test_resolve_error(chain, did, error);
+    test_resolve_jwk_error(split_x509_cert_bundle(chain), did, error); // NOLINT(clang-analyzer-cplusplus.NewDeleteLeaks)
+  }
+
+  const auto chain = load_certificate_chain("ed25519-non-repudiation.pem");
+  const auto* error =
+    "Ed25519 certificate key usage must include digital signature";
+  test_resolve_error(chain, did, error);
+  test_resolve_jwk_error(split_x509_cert_bundle(chain), did, error); // NOLINT(clang-analyzer-cplusplus.NewDeleteLeaks)
+} // NOLINT(clang-analyzer-cplusplus.NewDeleteLeaks)
+
+TEST_CASE("TestEd25519NonCanonicalKey")
+{
+  // The leaf public key is y = p (ed ff .. ff 7f), which RFC 8032 section
+  // 5.1.3 says must fail to decode. OpenSSL accepts it, so the resolver
+  // has to reject it itself. The chain is otherwise valid and verifies.
+  const std::string did =
+    "did:x509:0:sha256:rmKxLg-DhZIZKJuGUj9MOsXWdwtljpOjBJQm-6Qr62g"
+    "::subject:CN:didx509cpp%20Ed25519%20Non-canonical%20Test%20Leaf";
+  const auto chain = load_certificate_chain("ed25519-non-canonical-key.pem");
+  const auto* error = "non-canonical Ed25519 public key encoding";
+  test_resolve_error(chain, did, error);
+  test_resolve_jwk_error(split_x509_cert_bundle(chain), did, error); // NOLINT(clang-analyzer-cplusplus.NewDeleteLeaks)
+} // NOLINT(clang-analyzer-cplusplus.NewDeleteLeaks)
 }
 
 int main(int argc, char** argv)
