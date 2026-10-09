@@ -5,6 +5,16 @@ The method is [registered within the W3C DID Extensions registry](https://github
 
 [![Continuous Integration](https://github.com/microsoft/didx509cpp/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/microsoft/didx509cpp/actions/workflows/ci.yml) [![CodeQL](https://github.com/microsoft/didx509cpp/actions/workflows/codeql-analysis.yml/badge.svg?branch=main)](https://github.com/microsoft/didx509cpp/actions/workflows/codeql-analysis.yml)
 
+## Requirements
+
+- C++20.
+- OpenSSL 3.3 or newer, including development headers and `libcrypto`.
+  Older OpenSSL versions are not supported.
+- CMake 3.18 or newer for CMake-based builds.
+
+For a non-system OpenSSL installation, pass `-DOPENSSL_ROOT_DIR=<prefix>` when
+configuring CMake.
+
 ## Usage
 
 ```cpp
