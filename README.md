@@ -35,7 +35,11 @@ try {
 The resolver exports RSA, EC (P-256, P-384, and P-521), and Ed25519 public keys.
 Ed25519 keys are exported as an
 [RFC 8037](https://www.rfc-editor.org/rfc/rfc8037) JWK with `kty: "OKP"`,
-`crv: "Ed25519"`, and the base64url-encoded 32-byte public key in `x`.
+`crv: "Ed25519"`, and the base64url-encoded 32-byte public key in `x`. The
+encoding must be canonical per
+[RFC 8032 section 5.1.3](https://www.rfc-editor.org/rfc/rfc8032#section-5.1.3):
+a key whose y-coordinate is not less than the field prime is rejected, even
+though OpenSSL accepts it.
 
 Ed25519 keys are signing-only: the DID document includes `assertionMethod`,
 never `keyAgreement`. If the leaf certificate has a Key Usage extension, it

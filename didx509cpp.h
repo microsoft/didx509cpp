@@ -136,6 +136,32 @@ namespace didx509
       return r;
     }
 
+    // RFC 8032 section 5.1.3: an Ed25519 public key encodes the y-coordinate
+    // in the low 255 bits, little-endian, with the sign of x in the top bit.
+    // Decoding fails if y >= p = 2^255 - 19, so the only non-canonical
+    // encodings are the 19 values p .. 2^255 - 1 (times two for the sign bit).
+    // OpenSSL accepts and re-exports these unchanged, so check here.
+    inline bool is_canonical_ed25519_public_key(const std::vector<uint8_t>& key)
+    {
+      if (key.size() != 32)
+      {
+        return false;
+      }
+      // y >= p iff bits 1..254 are all set and the low byte is >= 0xed.
+      if ((key[31] & 0x7f) != 0x7f)
+      {
+        return true;
+      }
+      for (size_t i = 1; i < 31; i++)
+      {
+        if (key[i] != 0xff)
+        {
+          return true;
+        }
+      }
+      return key[0] < 0xed;
+    }
+
     template <class T, T* (*CTOR)(), void (*DTOR)(T*)>
     class UqSSLOBJECT
     {
@@ -912,6 +938,11 @@ namespace didx509
             if (raw_key_size != raw_key.size())
             {
               throw std::runtime_error("invalid Ed25519 public key size");
+            }
+            if (!is_canonical_ed25519_public_key(raw_key))
+            {
+              throw std::runtime_error(
+                "non-canonical Ed25519 public key encoding");
             }
             r += R"("kty":"OKP","crv":"Ed25519","x":")" +
               to_base64url(raw_key) + R"(")";

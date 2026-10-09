@@ -829,6 +829,20 @@ TEST_CASE("TestEd25519InvalidKeyUsage")
   test_resolve_error(chain, did, error);
   test_resolve_jwk_error(split_x509_cert_bundle(chain), did, error); // NOLINT(clang-analyzer-cplusplus.NewDeleteLeaks)
 } // NOLINT(clang-analyzer-cplusplus.NewDeleteLeaks)
+
+TEST_CASE("TestEd25519NonCanonicalKey")
+{
+  // The leaf public key is y = p (ed ff .. ff 7f), which RFC 8032 section
+  // 5.1.3 says must fail to decode. OpenSSL accepts it, so the resolver
+  // has to reject it itself. The chain is otherwise valid and verifies.
+  const std::string did =
+    "did:x509:0:sha256:rmKxLg-DhZIZKJuGUj9MOsXWdwtljpOjBJQm-6Qr62g"
+    "::subject:CN:didx509cpp%20Ed25519%20Non-canonical%20Test%20Leaf";
+  const auto chain = load_certificate_chain("ed25519-non-canonical-key.pem");
+  const auto* error = "non-canonical Ed25519 public key encoding";
+  test_resolve_error(chain, did, error);
+  test_resolve_jwk_error(split_x509_cert_bundle(chain), did, error); // NOLINT(clang-analyzer-cplusplus.NewDeleteLeaks)
+} // NOLINT(clang-analyzer-cplusplus.NewDeleteLeaks)
 }
 
 int main(int argc, char** argv)
