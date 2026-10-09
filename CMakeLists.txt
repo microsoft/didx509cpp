@@ -19,7 +19,7 @@ install(TARGETS didx509cpp)
 
 set(CMAKE_FIND_LIBRARY_SUFFIXES ".a" ".so")
 
-find_package(OpenSSL)
+find_package(OpenSSL 3.3 REQUIRED)
 target_compile_definitions(didx509cpp INTERFACE HAVE_OPENSSL)
 target_link_libraries(didx509cpp INTERFACE crypto)
 

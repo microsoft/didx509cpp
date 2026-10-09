@@ -12,18 +12,12 @@ on:
 
 jobs:
   build-test-ubuntu:
-    runs-on: ${{ matrix.os }}
+    runs-on: ubuntu-26.04
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-22.04, ubuntu-24.04]
         build_type: [Debug, Release]
-        compiler: [clang++-15, clang++-18]
-        exclude:
-          - os: ubuntu-22.04
-            compiler: clang++-18
-          - os: ubuntu-24.04
-            compiler: clang++-15
+        compiler: [clang++-18, clang++-21]
 
     steps:
       - name: Install packages
@@ -31,13 +25,13 @@ jobs:
           sudo apt update
           sudo apt install libcurl4-openssl-dev libssl-dev
 
-      - name: Install clang 15
-        if: matrix.compiler == 'clang++-15'
-        run: sudo apt install clang-15
-
       - name: Install clang 18
         if: matrix.compiler == 'clang++-18'
         run: sudo apt install clang-18
+
+      - name: Install clang 21
+        if: matrix.compiler == 'clang++-21'
+        run: sudo apt install clang-21
 
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
@@ -62,7 +56,7 @@ jobs:
 
   clang-tidy:
     name: Clang-Tidy
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
 
     steps:
       - name: Install packages

@@ -5,6 +5,10 @@ The method is [registered within the W3C DID Extensions registry](https://github
 
 [![Continuous Integration](https://github.com/microsoft/didx509cpp/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/microsoft/didx509cpp/actions/workflows/ci.yml) [![CodeQL](https://github.com/microsoft/didx509cpp/actions/workflows/codeql-analysis.yml/badge.svg?branch=main)](https://github.com/microsoft/didx509cpp/actions/workflows/codeql-analysis.yml)
 
+## Requirements
+
+A C++20 compiler and OpenSSL 3.3 or newer.
+
 ## Usage
 
 ```cpp
@@ -29,7 +33,7 @@ try {
 ## Supported public keys
 
 The resolver exports RSA, EC (P-256, P-384, and P-521), and Ed25519 public keys.
-Ed25519 requires OpenSSL 1.1.1 or newer and is exported as an
+Ed25519 keys are exported as an
 [RFC 8037](https://www.rfc-editor.org/rfc/rfc8037) JWK with `kty: "OKP"`,
 `crv: "Ed25519"`, and the base64url-encoded 32-byte public key in `x`.
 

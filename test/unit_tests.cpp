@@ -749,7 +749,6 @@ TEST_CASE("to_base64 and to_base64url empty input")
   CHECK(to_base64url({}) == "");
 }
 
-#ifdef EVP_PKEY_ED25519
 TEST_CASE("TestEd25519Resolution")
 {
   const std::string did =
@@ -830,7 +829,6 @@ TEST_CASE("TestEd25519InvalidKeyUsage")
   test_resolve_error(chain, did, error);
   test_resolve_jwk_error(split_x509_cert_bundle(chain), did, error); // NOLINT(clang-analyzer-cplusplus.NewDeleteLeaks)
 } // NOLINT(clang-analyzer-cplusplus.NewDeleteLeaks)
-#endif
 }
 
 int main(int argc, char** argv)

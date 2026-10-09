@@ -3,25 +3,27 @@
 
 #pragma once
 
-#include <cstring>
 #include <cstdint>
 #include <cstdlib>
+#include <cstring>
 #include <ctime>
 #include <initializer_list>
 #include <limits>
-#include <memory>
 #include <map>
+#include <memory>
 #include <openssl/asn1.h>
 #include <openssl/bio.h>
 #include <openssl/bn.h>
+#include <openssl/core_names.h>
 #include <openssl/crypto.h>
 #include <openssl/err.h>
 #include <openssl/evp.h>
 #include <openssl/obj_mac.h>
 #include <openssl/objects.h>
-#include <openssl/ossl_typ.h>
+#include <openssl/opensslv.h>
 #include <openssl/pem.h>
 #include <openssl/safestack.h>
+#include <openssl/types.h>
 #include <openssl/x509.h>
 #include <openssl/x509_vfy.h>
 #include <openssl/x509v3.h>
@@ -31,9 +33,8 @@
 #include <utility>
 #include <vector>
 
-#if defined(OPENSSL_VERSION_MAJOR) && OPENSSL_VERSION_MAJOR >= 3
-#  include <openssl/core_names.h>
-#  include <openssl/types.h>
+#if OPENSSL_VERSION_NUMBER < 0x30300000L
+#  error "didx509cpp requires OpenSSL 3.3 or newer"
 #endif
 
 namespace didx509
@@ -456,11 +457,7 @@ namespace didx509
 
       bool operator==(const UqEVP_PKEY& other) const
       {
-#if defined(OPENSSL_VERSION_MAJOR) && OPENSSL_VERSION_MAJOR >= 3
         return EVP_PKEY_eq(*this, other) == 1;
-#else
-        return EVP_PKEY_cmp(*this, other) == 1;
-#endif
       }
 
       bool operator!=(const UqEVP_PKEY& other) const
@@ -468,7 +465,6 @@ namespace didx509
         return !(*this == other);
       }
 
-#if defined(OPENSSL_VERSION_MAJOR) && OPENSSL_VERSION_MAJOR >= 3
       UqBIGNUM get_bn_param(const char* key_name) const
       {
         BIGNUM* bn = nullptr;
@@ -477,7 +473,6 @@ namespace didx509
         BN_free(bn);
         return r;
       }
-#endif
     };
 
     struct UqEVP_PKEY_CTX : public UqSSLOBJECT<EVP_PKEY_CTX, nullptr, nullptr>
@@ -834,15 +829,9 @@ namespace didx509
         {
           case EVP_PKEY_RSA: {
             r += R"("kty":"RSA",)";
-#if defined(OPENSSL_VERSION_MAJOR) && OPENSSL_VERSION_MAJOR >= 3
             const UqEVP_PKEY_CTX ek_ctx(EVP_PKEY_RSA);
             auto n = pk.get_bn_param(OSSL_PKEY_PARAM_RSA_N);
             auto e = pk.get_bn_param(OSSL_PKEY_PARAM_RSA_E);
-#else
-            auto rsa = EVP_PKEY_get0_RSA(pk);
-            const BIGNUM *n = nullptr, *e = nullptr, *d = nullptr;
-            RSA_get0_key(rsa, &n, &e, &d);
-#endif
             auto n_len = BN_num_bytes(n);
             auto e_len = BN_num_bytes(e);
             std::vector<uint8_t> nv(n_len);
@@ -858,7 +847,6 @@ namespace didx509
             r += R"("crv":")";
             // Field-element size in octets for the selected curve (RFC 7518).
             int coord_size = 0;
-#if defined(OPENSSL_VERSION_MAJOR) && OPENSSL_VERSION_MAJOR >= 3
             // RAII-owned so the coordinates are freed on every exit path,
             // including the throws below. get_bn_param also checks the result,
             // which the raw EVP_PKEY_get_bn_param calls here did not.
@@ -889,36 +877,6 @@ namespace didx509
             {
               throw std::runtime_error("unsupported EC key curve");
             }
-#else
-            auto ec_key = EVP_PKEY_get0_EC_KEY(pk);
-            const EC_GROUP* grp = EC_KEY_get0_group(ec_key);
-            int curve_nid = EC_GROUP_get_curve_name(grp);
-            const EC_POINT* pnt = EC_KEY_get0_public_key(ec_key);
-            // RAII-owned so the coordinates are freed on every exit path,
-            // including the throws below.
-            UqBIGNUM x;
-            UqBIGNUM y;
-            CHECK1(EC_POINT_get_affine_coordinates(grp, pnt, x, y, nullptr));
-            if (curve_nid == NID_X9_62_prime256v1)
-            {
-              r += "P-256";
-              coord_size = 32;
-            }
-            else if (curve_nid == NID_secp384r1)
-            {
-              r += "P-384";
-              coord_size = 48;
-            }
-            else if (curve_nid == NID_secp521r1)
-            {
-              r += "P-521";
-              coord_size = 66;
-            }
-            else
-            {
-              throw std::runtime_error("unsupported EC key curve");
-            }
-#endif
             r += R"(",)";
             // RFC 7518 (JWA) section 6.2.1.2/6.2.1.3 requires the "x" and "y"
             // octet strings to be the full coordinate size for the curve (e.g.
@@ -939,7 +897,6 @@ namespace didx509
             r += R"("y":")" + to_base64url(yv) + R"(")";
             break;
           }
-#ifdef EVP_PKEY_ED25519
           case EVP_PKEY_ED25519: {
             // RFC 8032 section 5.1.5: Ed25519 public keys are 32 octets.
             std::vector<uint8_t> raw_key(32);
@@ -960,7 +917,6 @@ namespace didx509
               to_base64url(raw_key) + R"(")";
             break;
           }
-#endif
           default:
             throw std::runtime_error("unsupported key base id");
         }
@@ -1264,7 +1220,6 @@ namespace didx509
         // set0 takes ownership of param, so release it from the unique_ptr.
         X509_STORE_CTX_set0_param(store_ctx, param_holder.release());
 
-#if defined(OPENSSL_VERSION_MAJOR) && OPENSSL_VERSION_MAJOR >= 3
         if (no_auth_key_id_ok)
         {
           X509_STORE_CTX_set_verify_cb(
@@ -1277,7 +1232,6 @@ namespace didx509
               return ok;
             });
         }
-#endif
 
         const int rc = X509_verify_cert(store_ctx);
 
@@ -1622,7 +1576,6 @@ namespace didx509
     {
       const bool include_assertion_method =
         !cert.has_key_usage() || cert.has_key_usage_digital_signature();
-#ifdef EVP_PKEY_ED25519
       if (EVP_PKEY_base_id(cert.public_key()) == EVP_PKEY_ED25519)
       {
         // RFC 8410 section 5: an Ed25519 end-entity key usage may only
@@ -1645,7 +1598,6 @@ namespace didx509
         }
         return {true, false};
       }
-#endif
       const bool include_key_agreement =
         !cert.has_key_usage() || cert.has_key_usage_key_agreement();
       if (!include_assertion_method && !include_key_agreement)
