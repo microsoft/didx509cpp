@@ -1,0 +1,25 @@
+name: Set up OpenSSL
+description: Build a pinned OpenSSL release for Ubuntu CI.
+
+runs:
+  using: composite
+  steps:
+    - name: Build OpenSSL
+      shell: bash
+      env:
+        OPENSSL_VERSION: 3.5.9
+        OPENSSL_SHA256: 603f5602e2eef00d77fbd429d34dcd5822bb301757a1bc9cdb24c670f1eb859a
+      run: |
+        set -euo pipefail
+        prefix="$RUNNER_TEMP/openssl-install"
+        archive="$RUNNER_TEMP/openssl-$OPENSSL_VERSION.tar.gz"
+        curl --fail --location --retry 3 --output "$archive" \
+          "https://github.com/openssl/openssl/releases/download/openssl-$OPENSSL_VERSION/openssl-$OPENSSL_VERSION.tar.gz"
+        echo "$OPENSSL_SHA256  $archive" | sha256sum --check --strict
+        tar -xzf "$archive" -C "$RUNNER_TEMP"
+        cd "$RUNNER_TEMP/openssl-$OPENSSL_VERSION"
+        ./Configure --prefix="$prefix" --libdir=lib no-shared no-tests
+        make -j2
+        make install_sw
+        "$prefix/bin/openssl" version
+        echo "OPENSSL_ROOT_DIR=$prefix" >> "$GITHUB_ENV"

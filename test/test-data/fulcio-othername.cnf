@@ -1,0 +1,63 @@
+# Copyright (c) Microsoft Corporation.
+# Licensed under the MIT License.
+
+[root]
+basicConstraints = critical,CA:TRUE
+keyUsage = critical,keyCertSign,cRLSign
+subjectKeyIdentifier = hash
+authorityKeyIdentifier = keyid:always
+1.3.6.1.4.1.57264.1.23 = ASN1:UTF8String:root-only
+
+[root-malformed-othername]
+basicConstraints = critical,CA:TRUE
+keyUsage = critical,keyCertSign,cRLSign
+subjectKeyIdentifier = hash
+authorityKeyIdentifier = keyid:always
+1.3.6.1.4.1.57264.1.23 = ASN1:UTF8String:root-only
+subjectAltName = otherName:1.3.6.1.4.1.57264.1.7;IA5:alice!example.com
+
+[leaf]
+basicConstraints = critical,CA:FALSE
+keyUsage = critical,digitalSignature
+subjectKeyIdentifier = hash
+authorityKeyIdentifier = keyid:always
+subjectAltName = critical,@san
+1.3.6.1.4.1.57264.1.1 = DER:68:74:74:70:73:3a:2f:2f:6c:65:67:61:63:79:2e:65:78:61:6d:70:6c:65:2e:63:6f:6d
+1.3.6.1.4.1.57264.1.8 = ASN1:UTF8String:https://v2.example.com
+1.3.6.1.4.1.57264.1.11 = ASN1:UTF8String:opaque%GG
+1.3.6.1.4.1.57264.1.24 = ASN1:UTF8String:alice
+
+[san]
+DNS.1 = othername.example.com
+otherName.1 = 1.3.6.1.4.1.57264.1.7;UTF8:alice!example.com
+otherName.2 = 1.3.6.1.4.1.57264.1.7;UTF8:bob!example.com
+otherName.3 = 1.3.6.1.4.1.57264.1.7;UTF8:alice!example.com
+
+[leaf-scalar-syntax]
+basicConstraints = critical,CA:FALSE
+keyUsage = critical,digitalSignature
+subjectKeyIdentifier = hash
+authorityKeyIdentifier = keyid:always
+subjectAltName = DER:30:81:8d:a0:21:06:0a:2b:06:01:04:01:83:bf:30:01:07:a0:13:0c:11:61:6c:69:63:65:21:65:78:61:6d:70:6c:65:2e:63:6f:6d:82:16:6c:69:74:65:72:61:6c:25:47:47:2e:65:78:61:6d:70:6c:65:2e:63:6f:6d:81:16:6c:69:74:65:72:61:6c:25:47:47:40:65:78:61:6d:70:6c:65:2e:63:6f:6d:86:0e:75:72:6e:3a:6c:69:74:65:72:61:6c:25:47:47:86:22:68:74:74:70:73:3a:2f:2f:65:78:61:6d:70:6c:65:2e:63:6f:6d:2f:75:73:65:72:3f:6b:65:79:3d:76:61:6c:75:65:82:00:81:00:86:00
+1.3.6.1.4.1.57264.1.1 = DER:68:74:74:70:73:3a:2f:2f:6c:69:74:65:72:61:6c:25:47:47:2e:65:78:61:6d:70:6c:65:2e:63:6f:6d
+
+[leaf-nonascii-dns]
+basicConstraints = critical,CA:FALSE
+keyUsage = critical,digitalSignature
+subjectKeyIdentifier = hash
+authorityKeyIdentifier = keyid:always
+subjectAltName = DER:30:26:a0:21:06:0a:2b:06:01:04:01:83:bf:30:01:07:a0:13:0c:11:61:6c:69:63:65:21:65:78:61:6d:70:6c:65:2e:63:6f:6d:82:01:ff
+
+[leaf-nonascii-email]
+basicConstraints = critical,CA:FALSE
+keyUsage = critical,digitalSignature
+subjectKeyIdentifier = hash
+authorityKeyIdentifier = keyid:always
+subjectAltName = DER:30:26:a0:21:06:0a:2b:06:01:04:01:83:bf:30:01:07:a0:13:0c:11:61:6c:69:63:65:21:65:78:61:6d:70:6c:65:2e:63:6f:6d:81:01:ff
+
+[leaf-nonascii-uri]
+basicConstraints = critical,CA:FALSE
+keyUsage = critical,digitalSignature
+subjectKeyIdentifier = hash
+authorityKeyIdentifier = keyid:always
+subjectAltName = DER:30:26:a0:21:06:0a:2b:06:01:04:01:83:bf:30:01:07:a0:13:0c:11:61:6c:69:63:65:21:65:78:61:6d:70:6c:65:2e:63:6f:6d:86:01:ff
