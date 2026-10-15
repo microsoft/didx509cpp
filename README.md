@@ -64,13 +64,16 @@ are decoded once, without case folding, URI rewriting, or Unicode normalization.
 
 The existing `fulcio-issuer` predicate still selects only the legacy raw UTF-8
 extension `.1`, with `https://` omitted from the predicate value. It never falls
-back to `.8`, and `fulcio:issuer` never falls back to `.1`. Existing DID Document
-and JWK formats are unchanged. DID URL fragments are excluded from predicate
-matching and document IDs; percent-escape spelling in the DID is preserved.
+back to `.8`, and `fulcio:issuer` never falls back to `.1`. DID URL fragments
+are excluded from predicate matching and document IDs; percent-escape spelling
+in the DID is preserved.
 DID URL paths and queries are rejected. Slash and question-mark characters in
 identity values must be percent-encoded; they remain permitted inside fragments.
 All scalar predicates, including existing SAN, subject, and legacy issuer forms,
-require nonempty, correctly percent-encoded UTF-8 values.
+require nonempty, correctly percent-encoded UTF-8 values. The `eku` predicate
+value must be a canonical dotted-decimal OID. Subject names that repeat an
+attribute type are not supported by the specification's certificate model and
+are rejected rather than matched against any one of their values.
 
 Registered OtherName values and standalone `.8`-`.24` extensions require a
 complete, minimally encoded DER UTF8String. Malformed or unsupported SAN entries
@@ -80,6 +83,15 @@ normal certificate path validation is not bypassed.
 Email, DNS, and URI SANs must contain valid ASCII IA5Strings. The supplied
 certificates must match the verified leaf-first chain exactly, so path building
 cannot silently discard malformed or duplicate evidence.
+
+## DID document shape
+
+Resolution produces the DID document defined by the specification: the
+`@context` is `https://www.w3.org/ns/cid/v1`, the single verification method
+`<DID>#0` has type `JsonWebKey`, and verification relationships are derived
+from the leaf certificate's Key Usage as described below. Consumers that
+expected the previous `JsonWebKey2020` shape with the DID Core and JWS 2020
+contexts need to update.
 
 ## Supported public keys
 
@@ -92,17 +104,18 @@ encoding must be canonical per
 a key whose y-coordinate is not less than the field prime is rejected, even
 though OpenSSL accepts it.
 
-Ed25519 keys are signing-only: the DID document includes `assertionMethod`,
-never `keyAgreement`. If the leaf certificate has a Key Usage extension, it
-must include `digitalSignature` and, following
+Ed25519 keys are signing-only: the DID document includes `authentication` and
+`assertionMethod`, never `keyAgreement`. If the leaf certificate has a Key
+Usage extension, it must include `digitalSignature` and, following
 [RFC 8410 section 5](https://www.rfc-editor.org/rfc/rfc8410#section-5), must
 not include `keyAgreement`, `keyEncipherment`, `dataEncipherment`,
 `encipherOnly`, or `decipherOnly`. Without Key Usage, the key is still treated
 as signing-only.
 
-RSA and EC keys include `assertionMethod` when Key Usage is absent or includes
-`digitalSignature`, and `keyAgreement` when Key Usage is absent or includes
-`keyAgreement`. A Key Usage extension with neither is rejected.
+RSA and EC keys include `authentication` and `assertionMethod` when Key Usage
+is absent or includes `digitalSignature`, and `keyAgreement` when Key Usage is
+absent or includes `keyAgreement`. A Key Usage extension with neither is
+rejected.
 
 ## Contributing
 
