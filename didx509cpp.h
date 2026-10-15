@@ -54,28 +54,30 @@ namespace didx509
       return "unknown error";
     }
 
-    /// Throws if rc is different from and there is an error
+    /// Throws if rc is different from 1. OpenSSL does not always queue an
+    /// error for a failed call, so the error queue only informs the message
+    /// and never decides whether to throw.
     inline void CHECK1(int rc)
 #ifdef _DEBUG
       __attribute__((noinline))
 #endif
     {
       const unsigned long ec = ERR_get_error();
-      if (rc != 1 && ec != 0)
+      if (rc != 1)
       {
         throw std::runtime_error(
           std::string("OpenSSL error: ") + error_string(ec));
       }
     }
 
-    /// Throws if rc is 0 and there is an error
+    /// Throws if rc is 0, see CHECK1 for the role of the error queue.
     inline void CHECK0(int rc)
 #ifdef _DEBUG
       __attribute__((noinline))
 #endif
     {
       const unsigned long ec = ERR_get_error();
-      if (rc == 0 && ec != 0)
+      if (rc == 0)
       {
         throw std::runtime_error(
           std::string("OpenSSL error: ") + error_string(ec));
@@ -660,10 +662,6 @@ namespace didx509
                                     EXTENDED_KEY_USAGE_new,
                                     EXTENDED_KEY_USAGE_free>
     {
-      UqEXTENDED_KEY_USAGE(EXTENDED_KEY_USAGE* eku) :
-        UqSSLOBJECT(sk_ASN1_OBJECT_dup(eku), EXTENDED_KEY_USAGE_free)
-      {}
-
       UqEXTENDED_KEY_USAGE(const UqX509_EXTENSION& ext) :
         UqSSLOBJECT(nullptr, EXTENDED_KEY_USAGE_free, false)
       {
@@ -900,9 +898,15 @@ namespace didx509
 
       [[nodiscard]] bool has_common_name(const std::string& expected_name) const;
 
-      [[nodiscard]] std::map<std::string, std::vector<std::string>> subject() const
+      /// Maps the subject name to the did:x509 JSON model: one UTF-8 value per
+      /// attribute, keyed by RFC 4514 label or dotted OID. The model does not
+      /// support repeated attributes, so a name that carries the same
+      /// attribute type more than once (as separate RDNs or within a
+      /// multi-valued RDN) is rejected rather than matched against any one of
+      /// its values.
+      [[nodiscard]] std::map<std::string, std::string> subject() const
       {
-        std::map<std::string, std::vector<std::string>> r;
+        std::map<std::string, std::string> r;
 
         auto * name = X509_get_subject_name(*this);
         CHECKNULL(name);
@@ -981,7 +985,11 @@ namespace didx509
             value.assign(utf8.get(), utf8.get() + utf8_len);
           }
 
-          r[key].push_back(std::move(value));
+          if (!r.emplace(key, std::move(value)).second)
+          {
+            throw std::runtime_error(
+              "certificate subject contains duplicate attribute: " + key);
+          }
         }
 
         return r;
@@ -1102,7 +1110,7 @@ namespace didx509
       [[nodiscard]] std::vector<uint8_t> der() const
       {
         UqBIO mem;
-        i2d_X509_bio(mem, *this);
+        CHECK1(i2d_X509_bio(mem, *this));
         return mem.to_vector();
       }
 
@@ -1619,6 +1627,42 @@ namespace didx509
         (digit >= 0x41 && digit <= 0x46) || (digit >= 0x61 && digit <= 0x66);
     }
 
+    /// Checks that value is a dotted-decimal OID matching the did:x509 ABNF
+    /// (oid = 1*DIGIT *("." 1*DIGIT)) in canonical form, i.e. without
+    /// leading zeros. The spec compares OIDs as strings, so each OID must
+    /// have exactly one spelling; OBJ_txt2obj alone would also accept spaces,
+    /// leading zeros, empty arcs and anything after an embedded NUL.
+    inline bool is_canonical_oid(const std::string& value)
+    {
+      if (value.empty())
+      {
+        return false;
+      }
+      size_t start = 0;
+      while (true)
+      {
+        const auto end = value.find('.', start);
+        const auto arc_end = end == std::string::npos ? value.size() : end;
+        const auto arc_size = arc_end - start;
+        if (arc_size == 0 || (arc_size > 1 && value[start] == '0'))
+        {
+          return false;
+        }
+        for (size_t i = start; i < arc_end; i++)
+        {
+          if (value[i] < '0' || value[i] > '9')
+          {
+            return false;
+          }
+        }
+        if (end == std::string::npos)
+        {
+          return true;
+        }
+        start = end + 1;
+      }
+    }
+
     // Adapted from curl:
     // https://github.com/curl/curl/blob/e335d778e3eaa41ebbe209e9b8110e8a0d9a72f3/lib/escape.c#L134
     inline std::string url_unescape(const std::string& is)
@@ -1872,20 +1916,11 @@ namespace didx509
                 std::string("unsupported subject key: '") + k + "'");
             }
 
-            bool found = false;
-            for (const auto& fv : sit->second)
-            {
-              // The did:x509 spec defines subject matching via object.subset,
-              // i.e. exact equality of the attribute value. A substring match
-              // would incorrectly let e.g. "CN:Microsoft" match a certificate
-              // whose CN is "Microsoft Corporation".
-              if (fv == v)
-              {
-                found = true;
-                break;
-              }
-            }
-            if (!found)
+            // The did:x509 spec defines subject matching via object.subset,
+            // i.e. exact equality of the attribute value. A substring match
+            // would incorrectly let e.g. "CN:Microsoft" match a certificate
+            // whose CN is "Microsoft Corporation".
+            if (sit->second != v)
             {
               throw std::runtime_error(
                 std::string("invalid subject key/value: " + k + "=" + v));
@@ -1901,6 +1936,10 @@ namespace didx509
           if (args.size() != 1)
           {
             throw std::runtime_error("exactly one EKU required");
+          }
+          if (!is_canonical_oid(args[0]))
+          {
+            throw std::runtime_error("invalid EKU: " + args[0]);
           }
 
           const UqASN1_OBJECT oid(args[0]);
@@ -2065,24 +2104,24 @@ namespace didx509
       const auto& leaf_jwk = leaf.public_jwk();
 
       std::string r = R"({
-    "@context": [
-        "https://www.w3.org/ns/did/v1",
-        "https://w3id.org/security/suites/jws-2020/v1"
-    ],
+    "@context": "https://www.w3.org/ns/cid/v1",
     "id": ")" + did_json +
         R"(",
     "verificationMethod": [{
         "id": ")" + did_json +
         R"(#0",
-        "type": "JsonWebKey2020",
+        "type": "JsonWebKey",
         "controller": ")" + did_json +
         R"(",
         "publicKeyJwk": )" + leaf_jwk +
         R"(
     }])";
 
+      // Per the did:x509 resolution steps, digitalSignature (or an absent Key
+      // Usage extension) yields both authentication and assertionMethod.
       if (include_assertion_method)
       {
+        r += R"(,"authentication": [")" + did_json + R"(#0"])";
         r += R"(,"assertionMethod": [")" + did_json + R"(#0"])";
       }
       if (include_key_agreement)
@@ -2127,6 +2166,9 @@ namespace didx509
       }
     }
     verify(valid_chain, did_document_id(did));
+    // Resolution step 12 of the did:x509 spec: the leaf key usage must permit
+    // at least one verification relationship, whichever entry point is used.
+    is_agreed_signature_key(valid_chain.front());
 
     return valid_chain;
   }
@@ -2150,9 +2192,6 @@ namespace didx509
     const UqSTACK_OF_X509 chain(chain_pem);
 
     const auto valid_chain = resolve_chain(chain, did, ignore_time);
-    const auto& leaf = valid_chain.front();
-    is_agreed_signature_key(leaf);
-
-    return leaf.public_jwk();
+    return valid_chain.front().public_jwk();
   }
 }

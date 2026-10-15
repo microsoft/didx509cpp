@@ -91,19 +91,27 @@ void test_resolve_success(const std::string& chain, const std::string& did)
   // Verify that resolved DID document is valid JSON
   nlohmann::json doc;
   REQUIRE_NOTHROW(doc = nlohmann::json::parse(did_doc));
-  REQUIRE(doc["@context"].is_array());
-  CHECK(
-    doc["@context"] ==
-    nlohmann::json::array(
-      {"https://www.w3.org/ns/did/v1",
-       "https://w3id.org/security/suites/jws-2020/v1"}));
+  CHECK(doc["@context"] == "https://www.w3.org/ns/cid/v1");
   CHECK(doc["id"] == document_id);
   REQUIRE(doc["verificationMethod"].is_array());
   REQUIRE(doc["verificationMethod"].size() == 1);
   CHECK(doc["verificationMethod"][0]["id"] == document_id + "#0");
-  CHECK(doc["verificationMethod"][0]["type"] == "JsonWebKey2020");
+  CHECK(doc["verificationMethod"][0]["type"] == "JsonWebKey");
   CHECK(doc["verificationMethod"][0]["controller"] == document_id);
   CHECK(doc["verificationMethod"][0]["publicKeyJwk"].contains("kty"));
+  // authentication and assertionMethod are always emitted together, and at
+  // least one verification relationship is always present.
+  CHECK(doc.contains("authentication") == doc.contains("assertionMethod"));
+  CHECK((doc.contains("assertionMethod") || doc.contains("keyAgreement")));
+  for (const auto* relationship :
+       {"authentication", "assertionMethod", "keyAgreement"})
+  {
+    if (doc.contains(relationship))
+    {
+      CHECK(
+        doc[relationship] == nlohmann::json::array({document_id + "#0"}));
+    }
+  }
   
   std::string jwk;
   const auto split_chain = split_x509_cert_bundle(chain);
@@ -618,6 +626,32 @@ TEST_CASE("TestEKUInvalidValue")
   test_resolve_error(chain, did, "EKU not found");
 }
 
+TEST_CASE("TestEKUNonCanonicalValue")
+{
+  // The did:x509 ABNF restricts eku to a dotted-decimal OID and compares it
+  // as a string, so every spelling other than the canonical one must be
+  // rejected rather than parsed leniently by OBJ_txt2obj. Previously, these
+  // all resolved against the 1.3.6.1.4.1.311.10.3.21 EKU and the raw DID
+  // string, NUL byte included, was copied into the DID document.
+  auto chain = load_certificate_chain("ms-code-signing.pem");
+  const std::string base =
+    "did:x509:0:sha256:hH32p4SXlD8n_HLrk_mmNzIKArVh0KkbCeh6eAftfGE::eku:";
+  for (const auto& value : std::vector<std::string>{
+         "1.3.6.1.4.1.311.10.3.021",
+         "1.3.6.1.4.1.311.10.3.21.",
+         ".1.3.6.1.4.1.311.10.3.21",
+         "1.3.6.1.4.1.311.10.3..21",
+         "1 3 6 1 4 1 311 10 3 21",
+         "1.3.6.1.4.1.311.10.3.21%00",
+         std::string("1.3.6.1.4.1.311.10.3.21\0garbage", 31),
+         "1.3.6.1.4.1.311.10.3.2a",
+         ""})
+  {
+    CAPTURE(value);
+    test_resolve_error(chain, base + value, "invalid EKU");
+  }
+}
+
 TEST_CASE("TestFulcioIssuerWithEmailSAN")
 {
   auto chain = load_certificate_chain("fulcio-email.pem");
@@ -657,6 +691,7 @@ TEST_CASE("TestDIDDocumentKeyUsageSections")
     "did:x509:0:sha256:hH32p4SXlD8n_HLrk_mmNzIKArVh0KkbCeh6eAftfGE"
     "::subject:CN:Microsoft%20Corporation";
   auto doc = nlohmann::json::parse(resolve(chain, did, true));
+  CHECK(doc["authentication"] == nlohmann::json::array({did + "#0"}));
   CHECK(doc["assertionMethod"] == nlohmann::json::array({did + "#0"}));
   CHECK(doc["keyAgreement"] == nlohmann::json::array({did + "#0"}));
 
@@ -665,6 +700,7 @@ TEST_CASE("TestDIDDocumentKeyUsageSections")
     "did:x509:0:sha256:T1HzOxsDN5SKU6VYKcUFzNVlWiLdxbJ4H7w5WuYcUkM"
     "::san:dns:san-test.example.com";
   doc = nlohmann::json::parse(resolve(chain, did, true));
+  CHECK(doc["authentication"] == nlohmann::json::array({did + "#0"}));
   CHECK(doc["assertionMethod"] == nlohmann::json::array({did + "#0"}));
   CHECK_FALSE(doc.contains("keyAgreement"));
 }
@@ -739,11 +775,23 @@ std::vector<uint8_t> base64url_decode(const std::string& in)
   return out;
 }
 
-const nlohmann::json& fulcio_test_vectors()
+const nlohmann::json& specification_test_vectors()
 {
   static const auto vectors =
-    nlohmann::json::parse(load_test_data("fulcio-test-vectors.json"));
+    nlohmann::json::parse(load_test_data("test-vectors.json"));
   return vectors;
+}
+
+const nlohmann::json& specification_test_vector(const std::string& id)
+{
+  for (const auto& vector : specification_test_vectors())
+  {
+    if (vector.at("id") == id)
+    {
+      return vector;
+    }
+  }
+  throw std::runtime_error("unknown test vector: " + id);
 }
 
 std::vector<std::string> vector_certificate_chain(const nlohmann::json& vector)
@@ -763,24 +811,33 @@ std::vector<std::string> vector_certificate_chain(const nlohmann::json& vector)
   return chain;
 }
 
-TEST_CASE("Fulcio and OtherName specification vectors")
+std::string vector_pem_chain(const nlohmann::json& vector)
 {
-  const auto& vectors = fulcio_test_vectors();
+  std::string pem_chain;
+  for (const auto& pem : vector_certificate_chain(vector))
+  {
+    pem_chain += pem;
+  }
+  return pem_chain;
+}
+
+// test-vectors.json is the upstream did:x509 specification test suite,
+// https://github.com/microsoft/did-x509/blob/main/test-vectors.json
+TEST_CASE("did:x509 specification vectors")
+{
+  const auto& vectors = specification_test_vectors();
   REQUIRE(vectors.is_array());
-  REQUIRE(vectors.size() == 162);
+  REQUIRE(vectors.size() == 220);
   for (const auto& vector : vectors)
   {
     SUBCASE(vector.at("id").get_ref<const std::string&>().c_str())
     {
       const auto pems = vector_certificate_chain(vector);
-      std::string pem_chain;
-      for (const auto& pem : pems)
-      {
-        pem_chain += pem;
-      }
+      const auto pem_chain = vector_pem_chain(vector);
       const UqSTACK_OF_X509 chain(pems);
       const auto did = vector.at("input").at("did").get<std::string>();
       const auto& output = vector.at("output");
+      // The vectors do not check certificate validity periods.
       if (output.contains("error"))
       {
         REQUIRE_THROWS_AS(resolve_chain(chain, did, true), std::runtime_error);
@@ -793,22 +850,62 @@ TEST_CASE("Fulcio and OtherName specification vectors")
         REQUIRE_NOTHROW(verified = resolve_chain(chain, did, true));
         CHECK(verified.size() == chain.size());
         CHECK(verified.front().der() == chain.front().der());
-        const auto& expected_jwk = output.at("document")
-                                     .at("verificationMethod")
-                                     .at(0)
-                                     .at("publicKeyJwk");
-        // Synthetic upstream vectors use Ed25519, whose JWK export is not
-        // supported here. All vectors still exercise path and predicate checks.
-        if (expected_jwk.at("kty") != "OKP")
-        {
-          test_resolve_success(pem_chain, did);
-          CHECK(
-            nlohmann::json::parse(resolve_jwk(pems, did, true)) ==
-            expected_jwk);
-        }
+        const auto& expected_document = output.at("document");
+        test_resolve_success(pem_chain, did);
+        CHECK(
+          nlohmann::json::parse(resolve(pem_chain, did, true)) ==
+          expected_document);
+        CHECK(
+          nlohmann::json::parse(resolve_jwk(pems, did, true)) ==
+          expected_document.at("verificationMethod").at(0).at("publicKeyJwk"));
       }
     }
   }
+}
+
+TEST_CASE("TestSubjectDuplicateAttributeRejected")
+{
+  // The leaf subject is "CN=Other, CN=Leaf". The did:x509 JSON model does not
+  // support repeated attributes, so the chain must be rejected instead of
+  // matching ::subject:CN:Leaf against either value.
+  const auto& vector =
+    specification_test_vector("duplicate-certificate-subject-attribute");
+  const auto did = vector.at("input").at("did").get<std::string>();
+  REQUIRE(did.ends_with("::subject:CN:Leaf"));
+  const auto pem_chain = vector_pem_chain(vector);
+  const auto other_did =
+    did.substr(0, did.rfind("::")) + "::subject:CN:Other";
+  for (const auto& candidate : {did, other_did})
+  {
+    CAPTURE(candidate);
+    REQUIRE_THROWS_WITH( // NOLINT(clang-analyzer-cplusplus.NewDeleteLeaks)
+      resolve(pem_chain, candidate, true),
+      doctest::Contains("duplicate attribute: CN"));
+  }
+}
+
+TEST_CASE("TestValidityPeriodEnforcedUnlessIgnored")
+{
+  // The whole chain expired on 2021-01-01, so it only resolves when the
+  // caller explicitly asks to ignore validity periods.
+  const auto& vector =
+    specification_test_vector("certificate-validity-periods-are-not-checked");
+  const auto did = vector.at("input").at("did").get<std::string>();
+  const auto pem_chain = vector_pem_chain(vector);
+  const auto pems = vector_certificate_chain(vector);
+  REQUIRE_NOTHROW((void)resolve(pem_chain, did, true));
+  REQUIRE_THROWS_WITH(
+    (void)resolve(pem_chain, did, false),
+    doctest::Contains("certificate chain verification failed"));
+  REQUIRE_THROWS_WITH(
+    (void)resolve(pem_chain, did),
+    doctest::Contains("certificate chain verification failed"));
+  REQUIRE_THROWS_WITH(
+    (void)resolve_jwk(pems, did, false),
+    doctest::Contains("certificate chain verification failed"));
+  REQUIRE_THROWS_WITH(
+    (void)resolve_chain(UqSTACK_OF_X509(pems), did, false),
+    doctest::Contains("certificate chain verification failed"));
 }
 
 std::string der_octets(std::initializer_list<uint8_t> bytes)
@@ -1312,6 +1409,7 @@ TEST_CASE("TestEd25519Resolution")
     test_resolve_success(chain_pem, did);
     const auto doc = nlohmann::json::parse(resolve(chain_pem, did, true));
     CHECK(doc["verificationMethod"][0]["publicKeyJwk"] == expected_jwk);
+    CHECK(doc["authentication"] == nlohmann::json::array({did + "#0"}));
     CHECK(doc["assertionMethod"] == nlohmann::json::array({did + "#0"}));
     CHECK_FALSE(doc.contains("keyAgreement"));
 
