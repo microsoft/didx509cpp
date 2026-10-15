@@ -89,9 +89,10 @@ cannot silently discard malformed or duplicate evidence.
 Resolution produces the DID document defined by the specification: the
 `@context` is `https://www.w3.org/ns/cid/v1`, the single verification method
 `<DID>#0` has type `JsonWebKey`, and verification relationships are derived
-from the leaf certificate's Key Usage as described below. Consumers that
-expected the previous `JsonWebKey2020` shape with the DID Core and JWS 2020
-contexts need to update.
+from the leaf certificate's Key Usage as described below. This only affects
+callers of `resolve()` that read `@context` or `type` from the document, which
+previously used `JsonWebKey2020` with the DID Core and JWS 2020 contexts. The
+JWK itself, and therefore `resolve_jwk()`, is unchanged.
 
 ## Supported public keys
 
