@@ -3,6 +3,7 @@
 
 #pragma once
 
+#include <array>
 #include <cstdint>
 #include <cstdlib>
 #include <cstring>
@@ -40,6 +41,41 @@
 
 namespace didx509
 {
+  /// Optional memo of the certificate signature checks made while verifying a
+  /// chain, so that a certificate seen in many chains, such as a root or an
+  /// intermediate, has its signature checked once rather than every time.
+  ///
+  /// Only signatures found to be valid are recorded. A key is the SHA-256
+  /// digest of the DER encoding of a certificate, followed by the SHA-256
+  /// digest of the DER encoding of the SubjectPublicKeyInfo its signature was
+  /// verified with, so a record only applies to that certificate checked with
+  /// that key. Every other check, such as key usage or validity periods, is
+  /// still made on every verification.
+  ///
+  /// Called from within OpenSSL, so implementations must not throw. They must
+  /// be safe to call concurrently if shared between threads, and should bound
+  /// their size.
+  class SignatureCache
+  {
+  public:
+    using Key = std::array<uint8_t, 64>;
+
+    SignatureCache() = default;
+    SignatureCache(const SignatureCache&) = delete;
+    SignatureCache& operator=(const SignatureCache&) = delete;
+    SignatureCache(SignatureCache&&) = delete;
+    SignatureCache& operator=(SignatureCache&&) = delete;
+    virtual ~SignatureCache() = default;
+
+    /// Whether the signature identified by key was recorded as valid
+    [[nodiscard]] virtual bool contains(const Key& key) noexcept = 0;
+
+    /// Record that the signature identified by key is valid. depth is that of
+    /// the certificate it is on, 0 being the leaf, so that an implementation
+    /// can choose to only record those of issuers.
+    virtual void insert(const Key& key, int depth) noexcept = 0;
+  };
+
   namespace
   {
     inline std::string error_string(unsigned long ec)
@@ -1369,6 +1405,250 @@ namespace didx509
       }
     };
 
+    /// Key of the signature of subject made with the key of issuer, see
+    /// SignatureCache.
+    inline bool signature_cache_key(
+      X509* subject, X509* issuer, SignatureCache::Key& key)
+    {
+      constexpr unsigned int sha256_size = 32;
+      unsigned int digest_size = 0;
+
+      unsigned char* der = nullptr;
+      int der_size = i2d_X509(subject, &der);
+      if (der_size <= 0)
+      {
+        return false;
+      }
+      int rc = EVP_Digest(
+        der, der_size, key.data(), &digest_size, EVP_sha256(), nullptr);
+      OPENSSL_free(der);
+      if (rc != 1 || digest_size != sha256_size)
+      {
+        return false;
+      }
+
+      der = nullptr;
+      der_size = i2d_X509_PUBKEY(X509_get_X509_PUBKEY(issuer), &der);
+      if (der_size <= 0)
+      {
+        return false;
+      }
+      rc = EVP_Digest(
+        der,
+        der_size,
+        key.data() + sha256_size,
+        &digest_size,
+        EVP_sha256(),
+        nullptr);
+      OPENSSL_free(der);
+      return rc == 1 && digest_size == sha256_size;
+    }
+
+    inline bool verify_signature(
+      SignatureCache* cache,
+      X509* subject,
+      X509* issuer,
+      EVP_PKEY* key,
+      int depth)
+    {
+      SignatureCache::Key cache_key{};
+      const bool cacheable =
+        cache != nullptr && signature_cache_key(subject, issuer, cache_key);
+      if (cacheable && cache->contains(cache_key))
+      {
+        return true;
+      }
+      if (X509_verify(subject, key) <= 0)
+      {
+        return false;
+      }
+      if (cacheable)
+      {
+        cache->insert(cache_key, depth);
+      }
+      return true;
+    }
+
+    /// Reports an error as OpenSSL's verify_cb_cert does, returning 0 unless
+    /// the verify callback overrides it.
+    inline int verify_cb_cert(
+      X509_STORE_CTX* ctx, X509* cert, int depth, int err)
+    {
+      X509_STORE_CTX_set_error_depth(ctx, depth);
+      X509_STORE_CTX_set_current_cert(ctx, cert);
+      X509_STORE_CTX_set_error(ctx, err);
+      return X509_STORE_CTX_get_verify_cb(ctx)(0, ctx);
+    }
+
+    /// OpenSSL's ossl_x509_check_cert_time, for a certificate in the chain
+    inline int verify_cert_time(X509_STORE_CTX* ctx, X509* cert, int depth)
+    {
+      X509_VERIFY_PARAM* param = X509_STORE_CTX_get0_param(ctx);
+      const unsigned long flags = X509_VERIFY_PARAM_get_flags(param);
+      time_t check_time = 0;
+      time_t* ptime = nullptr;
+      if ((flags & X509_V_FLAG_USE_CHECK_TIME) != 0)
+      {
+        check_time = X509_VERIFY_PARAM_get_time(param);
+        ptime = &check_time;
+      }
+      else if ((flags & X509_V_FLAG_NO_CHECK_TIME) != 0)
+      {
+        return 1;
+      }
+
+      int i = X509_cmp_time(X509_get0_notBefore(cert), ptime);
+      if (
+        i == 0 &&
+        verify_cb_cert(
+          ctx, cert, depth, X509_V_ERR_ERROR_IN_CERT_NOT_BEFORE_FIELD) == 0)
+      {
+        return 0;
+      }
+      if (
+        i > 0 &&
+        verify_cb_cert(ctx, cert, depth, X509_V_ERR_CERT_NOT_YET_VALID) == 0)
+      {
+        return 0;
+      }
+
+      i = X509_cmp_time(X509_get0_notAfter(cert), ptime);
+      if (
+        i == 0 &&
+        verify_cb_cert(
+          ctx, cert, depth, X509_V_ERR_ERROR_IN_CERT_NOT_AFTER_FIELD) == 0)
+      {
+        return 0;
+      }
+      if (
+        i < 0 &&
+        verify_cb_cert(ctx, cert, depth, X509_V_ERR_CERT_HAS_EXPIRED) == 0)
+      {
+        return 0;
+      }
+      return 1;
+    }
+
+    /// OpenSSL's ossl_x509_signing_allowed
+    inline int signing_allowed(X509* issuer, X509* subject)
+    {
+      if ((X509_get_extension_flags(subject) & EXFLAG_PROXY) != 0)
+      {
+        return (X509_get_key_usage(issuer) & KU_DIGITAL_SIGNATURE) != 0 ?
+          X509_V_OK :
+          X509_V_ERR_KEYUSAGE_NO_DIGITAL_SIGNATURE;
+      }
+      return (X509_get_key_usage(issuer) & KU_KEY_CERT_SIGN) != 0 ?
+        X509_V_OK :
+        X509_V_ERR_KEYUSAGE_NO_CERTSIGN;
+    }
+
+    /// Replaces the last step of X509_verify_cert, which checks signatures and
+    /// validity periods once the chain is built and checked, with a port of
+    /// OpenSSL's internal_verify (crypto/x509/x509_vfy.c, the same from 3.3 to
+    /// 3.5) to its public API, which consults the SignatureCache set as the
+    /// context's app data. DANE and raw public keys, which are not used here,
+    /// are not supported. The issuer is not recorded on the context at each
+    /// depth, as OpenSSL offers no way to, and the verify callback used here
+    /// does not need it.
+    inline int verify_with_signature_cache(X509_STORE_CTX* ctx)
+    {
+      auto* cache =
+        static_cast<SignatureCache*>(X509_STORE_CTX_get_app_data(ctx));
+      STACK_OF(X509)* chain = X509_STORE_CTX_get0_chain(ctx);
+      const unsigned long flags =
+        X509_VERIFY_PARAM_get_flags(X509_STORE_CTX_get0_param(ctx));
+
+      int n = sk_X509_num(chain) - 1;
+      if (n < 0)
+      {
+        X509_STORE_CTX_set_error(ctx, X509_V_ERR_UNSPECIFIED);
+        return 0;
+      }
+      X509* xi = sk_X509_value(chain, n);
+      X509* xs = xi;
+      X509_STORE_CTX_set_error_depth(ctx, n);
+
+      // EXFLAG_SS is set when ossl_x509_likely_issued(xi, xi) is X509_V_OK
+      if (
+        (X509_get_extension_flags(xi) & EXFLAG_SS) == 0 &&
+        (flags & X509_V_FLAG_PARTIAL_CHAIN) == 0)
+      {
+        if (n > 0)
+        {
+          n--;
+          X509_STORE_CTX_set_error_depth(ctx, n);
+          xs = sk_X509_value(chain, n);
+        }
+        else if (
+          verify_cb_cert(
+            ctx, xi, 0, X509_V_ERR_UNABLE_TO_VERIFY_LEAF_SIGNATURE) == 0)
+        {
+          return 0;
+        }
+      }
+
+      while (n >= 0)
+      {
+        // Self-signatures are only checked when asked for
+        if (
+          xs != xi ||
+          ((flags & X509_V_FLAG_CHECK_SS_SIGNATURE) != 0 &&
+           (X509_get_extension_flags(xi) & EXFLAG_SS) != 0))
+        {
+          const int issuer_depth = n + (xs == xi ? 0 : 1);
+          const int ret =
+            xs == xi && (X509_get_extension_flags(xi) & EXFLAG_CA) == 0 ?
+            X509_V_OK :
+            signing_allowed(xi, xs);
+          if (
+            ret != X509_V_OK && verify_cb_cert(ctx, xi, issuer_depth, ret) == 0)
+          {
+            return 0;
+          }
+
+          EVP_PKEY* key = X509_get0_pubkey(xi);
+          if (key == nullptr)
+          {
+            if (
+              verify_cb_cert(
+                ctx,
+                xi,
+                issuer_depth,
+                X509_V_ERR_UNABLE_TO_DECODE_ISSUER_PUBLIC_KEY) == 0)
+            {
+              return 0;
+            }
+          }
+          else if (
+            !verify_signature(cache, xs, xi, key, n) &&
+            verify_cb_cert(ctx, xs, n, X509_V_ERR_CERT_SIGNATURE_FAILURE) == 0)
+          {
+            return 0;
+          }
+        }
+
+        if (verify_cert_time(ctx, xs, n) == 0)
+        {
+          return 0;
+        }
+
+        X509_STORE_CTX_set_current_cert(ctx, xs);
+        X509_STORE_CTX_set_error_depth(ctx, n);
+        if (X509_STORE_CTX_get_verify_cb(ctx)(1, ctx) == 0)
+        {
+          return 0;
+        }
+
+        if (--n >= 0)
+        {
+          xi = xs;
+          xs = sk_X509_value(chain, n);
+        }
+      }
+      return 1;
+    }
+
     struct UqSTACK_OF_X509
       : public UqSSLOBJECT<STACK_OF(X509), nullptr, nullptr>
     {
@@ -1481,7 +1761,8 @@ namespace didx509
       [[nodiscard]] UqSTACK_OF_X509 verify(
         const std::vector<UqX509>& roots,
         bool ignore_time = false,
-        bool no_auth_key_id_ok = true) const
+        bool no_auth_key_id_ok = true,
+        SignatureCache* signature_cache = nullptr) const
       {
         if (size() <= 1)
         {
@@ -1536,6 +1817,12 @@ namespace didx509
               }
               return ok;
             });
+        }
+
+        if (signature_cache != nullptr)
+        {
+          CHECK1(X509_STORE_CTX_set_app_data(store_ctx, signature_cache));
+          X509_STORE_CTX_set_verify(store_ctx, verify_with_signature_cache);
         }
 
         const int rc = X509_verify_cert(store_ctx);
@@ -2137,7 +2424,8 @@ namespace didx509
   inline UqSTACK_OF_X509 resolve_chain(
     const UqSTACK_OF_X509& chain,
     const std::string& did,
-    bool ignore_time = false)
+    bool ignore_time = false,
+    SignatureCache* signature_cache = nullptr)
   {
     if (chain.empty())
     {
@@ -2150,7 +2438,7 @@ namespace didx509
     std::vector<UqX509> roots;
     roots.emplace_back(std::move(root));
 
-    auto valid_chain = chain.verify(roots, ignore_time);
+    auto valid_chain = chain.verify(roots, ignore_time, true, signature_cache);
     // Do not let path building discard evidence before eager extension checks.
     if (chain.size() != valid_chain.size())
     {
@@ -2176,22 +2464,26 @@ namespace didx509
   inline std::string resolve(
     const std::string& chain_pem,
     const std::string& did,
-    bool ignore_time = false)
+    bool ignore_time = false,
+    SignatureCache* signature_cache = nullptr)
   {
     const UqSTACK_OF_X509 chain(chain_pem);
 
-    const auto valid_chain = resolve_chain(chain, did, ignore_time);
+    const auto valid_chain =
+      resolve_chain(chain, did, ignore_time, signature_cache);
     return create_did_document(did_document_id(did), valid_chain);
   }
 
   inline std::string resolve_jwk(
     const std::vector<std::string>& chain_pem,
     const std::string& did,
-    bool ignore_time = false)
+    bool ignore_time = false,
+    SignatureCache* signature_cache = nullptr)
   {
     const UqSTACK_OF_X509 chain(chain_pem);
 
-    const auto valid_chain = resolve_chain(chain, did, ignore_time);
+    const auto valid_chain =
+      resolve_chain(chain, did, ignore_time, signature_cache);
     return valid_chain.front().public_jwk();
   }
 }
