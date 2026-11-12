@@ -1799,6 +1799,22 @@ namespace didx509
       }
     }
 
+    /// Whether a DID has a policy that reads Fulcio extensions. did_tokens are
+    /// the "::"-separated parts of the DID, the first one being its prefix.
+    inline bool has_fulcio_policy(const std::vector<std::string>& did_tokens)
+    {
+      for (size_t i = 1; i < did_tokens.size(); i++)
+      {
+        const auto& policy = did_tokens[i];
+        const auto name = std::string_view(policy).substr(0, policy.find(':'));
+        if (name == "fulcio" || name == "fulcio-issuer")
+        {
+          return true;
+        }
+      }
+      return false;
+    }
+
     inline std::string did_document_id(const std::string& did)
     {
       auto id = did.substr(0, did.find('#'));
@@ -1843,11 +1859,19 @@ namespace didx509
 
       check_fingerprint(chain, ca_fingerprint_alg, ca_fingerprint);
 
+      // Looking up every Fulcio extension on every certificate is costly, so
+      // it is only done for DIDs with a Fulcio policy. Other DIDs are not
+      // rejected here for a duplicate or malformed Fulcio extension.
+      const bool check_fulcio = has_fulcio_policy(top_tokens);
       std::map<std::string, std::string> leaf_fulcio;
       for (size_t i = 0; i < chain.size(); i++)
       {
         const auto cert = chain.at(i);
         (void)cert.subject_alternative_name();
+        if (!check_fulcio)
+        {
+          continue;
+        }
         auto fields = cert.fulcio_extensions();
         if (i == 0)
         {

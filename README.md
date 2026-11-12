@@ -77,9 +77,17 @@ are rejected rather than matched against any one of their values.
 
 Registered OtherName values and standalone `.8`-`.24` extensions require a
 complete, minimally encoded DER UTF8String. Malformed or unsupported SAN entries
-and malformed registered Fulcio extensions fail resolution even when unselected
-or present on a CA certificate. Standalone Fulcio extensions must be noncritical;
-normal certificate path validation is not bypassed.
+fail resolution even when unselected or present on a CA certificate. Standalone
+Fulcio extensions must be noncritical; normal certificate path validation is not
+bypassed.
+
+Standalone Fulcio extensions are only examined when the DID has a `fulcio` or
+`fulcio-issuer` predicate. In that case, duplicate or malformed registered
+Fulcio extensions fail resolution even when unselected or present on a CA
+certificate. A DID with neither predicate skips that examination, which avoids
+its cost, and so resolves even if a certificate carries a duplicate or malformed
+Fulcio extension.
+
 Email, DNS, and URI SANs must contain valid ASCII IA5Strings. The supplied
 certificates must match the verified leaf-first chain exactly, so path building
 cannot silently discard malformed or duplicate evidence.

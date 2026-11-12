@@ -1105,6 +1105,65 @@ TEST_CASE("Every registered Fulcio field is decoded eagerly")
   }
 }
 
+TEST_CASE("Malformed Fulcio extensions only fail DIDs with a Fulcio policy")
+{
+  // Each upstream vector has a malformed registered Fulcio extension that its
+  // DID does not select: an IA5String issuer on the leaf, and a token-subject
+  // that is not valid UTF-8 on the root.
+  for (const auto* id :
+       {"fulcio-selector-der-ia5-string-unselected",
+        "fulcio-selector-unselected-malformed-root-extension-fails"})
+  {
+    SUBCASE(id)
+    {
+      const auto& vector = specification_test_vector(id);
+      const auto pems = vector_certificate_chain(vector);
+      const auto pem = vector_pem_chain(vector);
+      const auto did = vector.at("input").at("did").get<std::string>();
+      const auto policies = did.find("::");
+      const auto fulcio_policy = did.substr(policies);
+      const auto without_fulcio = did.substr(0, policies) + "::subject:CN:Leaf";
+
+      test_resolve_success(pem, without_fulcio);
+      for (const auto& with_fulcio : {did, without_fulcio + fulcio_policy})
+      {
+        test_resolve_error(pem, with_fulcio, "DER UTF8String");
+        test_resolve_jwk_error(pems, with_fulcio, "DER UTF8String");
+      }
+    }
+  }
+}
+
+TEST_CASE("Duplicate Fulcio extensions only fail DIDs with a Fulcio policy")
+{
+  const auto pems =
+    split_x509_cert_bundle(load_certificate_chain("fulcio-othername.pem"));
+  const auto ext = raw_extension(
+    fulcio_extension_oids().at("source-repository-uri"),
+    der_tlv(0x0c, "opaque"));
+  for (const size_t index : {size_t{0}, size_t{1}})
+  {
+    CAPTURE(index);
+    // The certificates are modified after parsing, so their signatures no
+    // longer hold: only the policy checks are exercised.
+    const UqSTACK_OF_X509 chain(pems);
+    const auto cert = chain.at(index);
+    CHECK1(X509_add_ext(cert, ext, -1));
+    CHECK1(X509_add_ext(cert, ext, -1));
+    const auto did =
+      "did:x509:0:sha256:" + to_base64url(sha256(chain.back().der())) +
+      "::san:othername:1.3.6.1.4.1.57264.1.7:alice%21example.com";
+    CHECK_NOTHROW(verify(chain, did));
+    for (const auto* policy :
+         {"::fulcio-issuer:legacy.example.com", "::fulcio:token-subject:alice"})
+    {
+      CHECK_THROWS_WITH(
+        verify(chain, did + policy),
+        doctest::Contains("duplicate Fulcio extension"));
+    }
+  }
+}
+
 TEST_CASE("Fulcio and OtherName predicates through document and JWK resolution")
 {
   const auto pem = load_certificate_chain("fulcio-othername.pem");
