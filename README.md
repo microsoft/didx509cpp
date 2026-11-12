@@ -118,6 +118,38 @@ is absent or includes `digitalSignature`, and `keyAgreement` when Key Usage is
 absent or includes `keyAgreement`. A Key Usage extension with neither is
 rejected.
 
+## Caching signature checks
+
+Services that resolve many chains sharing the same roots and intermediates can
+pass a `didx509::SignatureCache` to `resolve()`, `resolve_jwk()` or
+`resolve_chain()`, so that each of those certificates' signatures is checked
+once rather than on every resolution:
+
+```cpp
+class MyCache : public didx509::SignatureCache
+{
+public:
+  bool contains(const Key& key) noexcept override;
+  void insert(const Key& key, int depth) noexcept override;
+};
+
+MyCache cache;
+std::string doc = resolve(pem_chain, did, false, &cache);
+```
+
+`insert()` is only called for a signature that was verified, with a key made
+of the SHA-256 digests of the certificate's DER encoding and of its issuer's
+SubjectPublicKeyInfo, so an entry only ever applies to that certificate checked
+with that key. `depth` is that of the certificate, 0 for the leaf, so that a
+cache can choose not to record leaves it does not expect to see again. Every
+other check, including Key Usage, validity periods, and the trust anchor's
+self-signature on first use, is still made on every resolution.
+
+The implementation decides how entries are stored, bounded and evicted, and
+must be safe to call concurrently if shared between threads. Its methods are
+called from within OpenSSL and must not throw. Without a cache, resolution is
+unchanged.
+
 ## Contributing
 
 To run clang-tidy locally, configure with Clang 18 and enable the opt-in
