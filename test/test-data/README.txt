@@ -7,10 +7,10 @@ Licensed under the MIT License.
 fulcio-test-vectors.json contains all 162 vectors whose IDs contain "fulcio" or
 "othername", selected without modifying their contents from:
 
-https://github.com/microsoft/did-x509/blob/054f1f6e364580c42fad862747903f2a6ee19976/test-vectors.json
+https://github.com/microsoft/did-x509/blob/38405b992d4e5e0de173a42a193c342a84db3cf6/test-vectors.json
 
 The upstream source file's Git blob SHA is
-ff7e21a7aa1e8a21c20fe64dcf2217f7f30c3c58.
+117fd4d1eaa8648d1832f66a739735122859b5f0.
 
 To refresh the subset, download the upstream test-vectors.json at the selected
 revision and run:
