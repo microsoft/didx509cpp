@@ -81,12 +81,11 @@ fail resolution even when unselected or present on a CA certificate. Standalone
 Fulcio extensions must be noncritical; normal certificate path validation is not
 bypassed.
 
-Standalone Fulcio extensions are only examined when the DID has a `fulcio` or
-`fulcio-issuer` predicate. In that case, duplicate or malformed registered
-Fulcio extensions fail resolution even when unselected or present on a CA
-certificate. A DID with neither predicate skips that examination, which avoids
-its cost, and so resolves even if a certificate carries a duplicate or malformed
-Fulcio extension.
+A standalone Fulcio extension is examined only when a predicate selects it, and
+only on the leaf certificate: `fulcio-issuer` selects `.1`, and `fulcio:<field>`
+selects the extension registered for that field. Resolution fails if a selected
+extension is absent, repeated, or malformed. Those that are not selected, and
+those of CA certificates, are ignored unless they are critical.
 
 Email, DNS, and URI SANs must contain valid ASCII IA5Strings. The supplied
 certificates must match the verified leaf-first chain exactly, so path building
