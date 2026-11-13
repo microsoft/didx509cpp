@@ -827,7 +827,7 @@ TEST_CASE("did:x509 specification vectors")
 {
   const auto& vectors = specification_test_vectors();
   REQUIRE(vectors.is_array());
-  REQUIRE(vectors.size() == 220);
+  REQUIRE(vectors.size() == 227);
   for (const auto& vector : vectors)
   {
     SUBCASE(vector.at("id").get_ref<const std::string&>().c_str())
@@ -1058,7 +1058,7 @@ TEST_CASE("Duplicate SAN extensions fail without breaking move ownership")
     (void)cert.subject_alternative_name(), "duplicate SAN extension");
 }
 
-TEST_CASE("Every registered Fulcio field is decoded eagerly")
+TEST_CASE("Every registered Fulcio field is decoded strictly")
 {
   REQUIRE(fulcio_extension_oids().size() == 17);
   const auto pem =
@@ -1069,22 +1069,21 @@ TEST_CASE("Every registered Fulcio field is decoded eagerly")
     const auto& field = entry.first;
     const auto& oid = entry.second;
     INFO(field);
+    CHECK_FALSE(UqX509(pem).fulcio_extension(field).has_value());
     for (const auto& value :
          {std::string{}, std::string("opaque:%/caf\xc3\xa9")})
     {
       const UqX509 cert(pem);
       const auto ext = raw_extension(oid, der_tlv(0x0c, value));
       CHECK1(X509_add_ext(cert, ext, -1));
-      const auto fields = cert.fulcio_extensions();
-      REQUIRE(fields.size() == 1);
-      CHECK(fields.at(field) == value);
+      CHECK(cert.fulcio_extension(field) == value);
     }
     {
       const UqX509 cert(pem);
       const auto ext = raw_extension(oid, der_tlv(0x16, "opaque"));
       CHECK1(X509_add_ext(cert, ext, -1));
       CHECK_THROWS_WITH(
-        (void)cert.fulcio_extensions(),
+        (void)cert.fulcio_extension(field),
         doctest::Contains("primitive DER UTF8String"));
     }
     {
@@ -1092,7 +1091,7 @@ TEST_CASE("Every registered Fulcio field is decoded eagerly")
       const auto ext = raw_extension(oid, der_tlv(0x0c, "opaque"), true);
       CHECK1(X509_add_ext(cert, ext, -1));
       CHECK_THROWS_WITH(
-        (void)cert.fulcio_extensions(), doctest::Contains("critical"));
+        (void)cert.fulcio_extension(field), doctest::Contains("critical"));
     }
     {
       const UqX509 cert(pem);
@@ -1100,8 +1099,45 @@ TEST_CASE("Every registered Fulcio field is decoded eagerly")
       CHECK1(X509_add_ext(cert, ext, -1));
       CHECK1(X509_add_ext(cert, ext, -1));
       CHECK_THROWS_WITH(
-        (void)cert.fulcio_extensions(), doctest::Contains("duplicate"));
+        (void)cert.fulcio_extension(field), doctest::Contains("duplicate"));
     }
+  }
+}
+
+TEST_CASE("Repeated Fulcio extensions only fail when selected on the leaf")
+{
+  // A certificate that repeats an extension is not valid X.509, but OpenSSL
+  // parses it. The specification requires rejecting it only when a policy
+  // selects the repeated extension; the upstream vectors cover that through
+  // resolution, and the other malformed cases.
+  const auto pems =
+    split_x509_cert_bundle(load_certificate_chain("fulcio-othername.pem"));
+  const auto ext = raw_extension(
+    fulcio_extension_oids().at("source-repository-uri"),
+    der_tlv(0x0c, "opaque"));
+  for (const size_t index : {size_t{0}, size_t{1}})
+  {
+    CAPTURE(index);
+    // The certificates are modified after parsing, so their signatures no
+    // longer hold: only the policy checks are exercised.
+    const UqSTACK_OF_X509 chain(pems);
+    const auto cert = chain.at(index);
+    CHECK1(X509_add_ext(cert, ext, -1));
+    CHECK1(X509_add_ext(cert, ext, -1));
+    const auto did =
+      "did:x509:0:sha256:" + to_base64url(sha256(chain.back().der()));
+    for (const auto* policy :
+         {"::san:othername:1.3.6.1.4.1.57264.1.7:alice%21example.com",
+          "::fulcio-issuer:legacy.example.com",
+          "::fulcio:token-subject:alice"})
+    {
+      CHECK_NOTHROW(verify(chain, did + policy));
+    }
+    CHECK_THROWS_WITH(
+      verify(chain, did + "::fulcio:source-repository-uri:opaque"),
+      doctest::Contains(
+        index == 0 ? "duplicate Fulcio extension" :
+                     "Fulcio extension not found"));
   }
 }
 
