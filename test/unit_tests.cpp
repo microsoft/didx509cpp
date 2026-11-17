@@ -4,11 +4,13 @@
 #include "didx509cpp.h"
 
 #include <algorithm>
+#include <array>
 #include <bit>
 #include <cctype>
 #include <cstddef>
 #include <cstdint>
 #include <cstring>
+#include <ctime>
 #include <exception>
 #include <fstream>
 #include <initializer_list>
@@ -20,7 +22,9 @@
 #include <openssl/obj_mac.h>
 #include <openssl/ossl_typ.h>
 #include <openssl/pem.h>
+#include <openssl/safestack.h>
 #include <openssl/x509.h>
+#include <openssl/x509_vfy.h>
 #include <openssl/x509v3.h>
 #include <optional>
 #include <set>
@@ -1618,6 +1622,15 @@ void add_test_extension(X509* cert, X509V3_CTX* ctx, int nid, const char* value)
   CHECK1(rc);
 }
 
+struct TestCertificateOptions
+{
+  bool authority_key_id = true;
+  // Defaults to a year from now
+  std::optional<time_t> not_after = std::nullopt;
+  // Defaults to what a CA or a leaf needs
+  const char* key_usage = nullptr;
+};
+
 // A PEM certificate for subject_key, issued by issuer with signing_key, or
 // self-signed if issuer is empty.
 std::string make_test_certificate(
@@ -1626,7 +1639,7 @@ std::string make_test_certificate(
   const std::string& issuer,
   const TestKey& signing_key,
   bool ca,
-  bool authority_key_id = true)
+  const TestCertificateOptions& options = {})
 {
   static long serial = 1;
   constexpr long one_year_s = 365L * 24 * 60 * 60;
@@ -1635,7 +1648,15 @@ std::string make_test_certificate(
   CHECK1(X509_set_version(x, X509_VERSION_3));
   CHECK1(ASN1_INTEGER_set(X509_get_serialNumber(x), serial++));
   CHECKNULL(X509_gmtime_adj(X509_getm_notBefore(x), -one_year_s));
-  CHECKNULL(X509_gmtime_adj(X509_getm_notAfter(x), one_year_s));
+  if (options.not_after.has_value())
+  {
+    time_t not_after = *options.not_after;
+    CHECKNULL(X509_time_adj(X509_getm_notAfter(x), 0, &not_after));
+  }
+  else
+  {
+    CHECKNULL(X509_gmtime_adj(X509_getm_notAfter(x), one_year_s));
+  }
   CHECK1(X509_set_pubkey(x, subject_key.pkey.get()));
   CHECK1(X509_NAME_add_entry_by_txt(
     X509_get_subject_name(x),
@@ -1661,13 +1682,15 @@ std::string make_test_certificate(
     &ctx,
     NID_basic_constraints,
     ca ? "critical,CA:TRUE" : "critical,CA:FALSE");
+  const char* default_key_usage =
+    ca ? "critical,keyCertSign" : "critical,digitalSignature";
   add_test_extension(
     x,
     &ctx,
     NID_key_usage,
-    ca ? "critical,keyCertSign" : "critical,digitalSignature");
+    options.key_usage != nullptr ? options.key_usage : default_key_usage);
   add_test_extension(x, &ctx, NID_subject_key_identifier, "hash");
-  if (authority_key_id)
+  if (options.authority_key_id)
   {
     add_test_extension(x, &ctx, NID_authority_key_identifier, "keyid:always");
   }
@@ -1715,7 +1738,12 @@ TEST_CASE("Signature cache entries are bound to the certificate and key")
   // Without an authority key identifier, so that path building accepts either
   // root as its issuer and only the signature check tells them apart.
   const auto intermediate = make_test_certificate(
-    "Test Intermediate", intermediate_key, root, root_key, true, false);
+    "Test Intermediate",
+    intermediate_key,
+    root,
+    root_key,
+    true,
+    {.authority_key_id = false});
   const auto leaf = make_test_certificate(
     "Test Leaf", leaf_key, intermediate, intermediate_key, false);
 
@@ -1758,6 +1786,225 @@ TEST_CASE("Signature cache entries are bound to the certificate and key")
     REQUIRE(signature_cache_key(subject, issuer, key));
     CHECK_FALSE(cache.keys.contains(key));
   }
+}
+
+// What a chain verification reports: its result, and every call of the verify
+// callback as {ok, error, depth, position of the certificate in the chain}.
+struct VerificationReport
+{
+  int result = 0;
+  int error = 0;
+  int error_depth = 0;
+  std::vector<std::array<int, 4>> callbacks;
+
+  bool operator==(const VerificationReport&) const = default;
+};
+
+struct VerifyCallbackState
+{
+  VerificationReport report;
+  bool accept_errors = false;
+};
+
+int verify_callback_state_index()
+{
+  static const int index =
+    X509_STORE_CTX_get_ex_new_index(0, nullptr, nullptr, nullptr, nullptr);
+  return index;
+}
+
+int reporting_verify_callback(int ok, X509_STORE_CTX* ctx)
+{
+  auto* state = static_cast<VerifyCallbackState*>(
+    X509_STORE_CTX_get_ex_data(ctx, verify_callback_state_index()));
+  STACK_OF(X509)* chain = X509_STORE_CTX_get0_chain(ctx);
+  int position = -1;
+  for (int i = 0; i < sk_X509_num(chain); ++i)
+  {
+    if (sk_X509_value(chain, i) == X509_STORE_CTX_get_current_cert(ctx))
+    {
+      position = i;
+    }
+  }
+  state->report.callbacks.push_back(
+    {ok,
+     X509_STORE_CTX_get_error(ctx),
+     X509_STORE_CTX_get_error_depth(ctx),
+     position});
+  return state->accept_errors ? 1 : ok;
+}
+
+struct VerificationSettings
+{
+  unsigned long flags = 0;
+  // Whether the verify callback lets verification carry on after an error
+  bool accept_errors = false;
+  std::optional<time_t> check_time = std::nullopt;
+};
+
+// Verifies pems, trusting the last one, with verify_with_signature_cache as
+// the last step if cache is given, and with OpenSSL's own otherwise.
+VerificationReport report_verification(
+  const std::vector<std::string>& pems,
+  const VerificationSettings& settings,
+  SignatureCache* cache)
+{
+  const UqSTACK_OF_X509 chain(pems);
+  UqX509_STORE store;
+  store.add(UqX509(pems.back()));
+  const auto target = chain.at(0);
+  UqX509_STORE_CTX ctx;
+  CHECK1(X509_STORE_CTX_init(ctx, store, target, chain));
+  X509_VERIFY_PARAM* param = X509_STORE_CTX_get0_param(ctx);
+  CHECK1(X509_VERIFY_PARAM_set_flags(param, settings.flags));
+  if (settings.check_time.has_value())
+  {
+    X509_VERIFY_PARAM_set_time(param, *settings.check_time);
+  }
+
+  VerifyCallbackState state{{}, settings.accept_errors};
+  CHECK1(
+    X509_STORE_CTX_set_ex_data(ctx, verify_callback_state_index(), &state));
+  X509_STORE_CTX_set_verify_cb(ctx, reporting_verify_callback);
+  if (cache != nullptr)
+  {
+    CHECK1(X509_STORE_CTX_set_app_data(ctx, cache));
+    X509_STORE_CTX_set_verify(ctx, verify_with_signature_cache);
+  }
+  state.report.result = X509_verify_cert(ctx);
+  state.report.error = X509_STORE_CTX_get_error(ctx);
+  state.report.error_depth = X509_STORE_CTX_get_error_depth(ctx);
+  return state.report;
+}
+
+struct VerificationComparison
+{
+  size_t different = 0;
+  size_t accepted = 0;
+  size_t rejected = 0;
+  size_t cache_hits = 0;
+};
+
+// verify_with_signature_cache is a port of a function internal to OpenSSL, so
+// this compares the two directly, including with settings that verify() does
+// not use, to find out if they come apart in a later version of OpenSSL.
+VerificationComparison compare_verification_with_and_without_cache()
+{
+  const TestKey root_key;
+  const TestKey intermediate_key;
+  const TestKey leaf_key;
+  const time_t now = time(nullptr);
+  const time_t leaf_not_after = now + 3600;
+
+  // A leaf, an intermediate and a root, with the one at depth made with options
+  const auto make_chain =
+    [&](size_t depth, const TestCertificateOptions& options) {
+      const auto root = make_test_certificate(
+        "Test Root",
+        root_key,
+        "",
+        root_key,
+        true,
+        depth == 2 ? options : TestCertificateOptions{});
+      const auto intermediate = make_test_certificate(
+        "Test Intermediate",
+        intermediate_key,
+        root,
+        root_key,
+        true,
+        depth == 1 ? options : TestCertificateOptions{});
+      const auto leaf = make_test_certificate(
+        "Test Leaf",
+        leaf_key,
+        intermediate,
+        intermediate_key,
+        false,
+        depth == 0 ? options :
+                     TestCertificateOptions{.not_after = leaf_not_after});
+      return std::vector<std::string>{leaf, intermediate, root};
+    };
+
+  const auto valid = make_chain(0, {.not_after = leaf_not_after});
+  std::vector<std::pair<std::string, std::vector<std::string>>> chains = {
+    {"valid", valid}, {"without its root", {valid[0], valid[1]}}};
+  for (size_t depth = 0; depth < valid.size(); ++depth)
+  {
+    const auto at = " at depth " + std::to_string(depth);
+    auto corrupted = valid;
+    corrupted[depth] = with_corrupted_signature(valid[depth]);
+    chains.emplace_back("corrupted signature" + at, corrupted);
+    chains.emplace_back(
+      "expired" + at, make_chain(depth, {.not_after = now - 3600}));
+    if (depth > 0)
+    {
+      chains.emplace_back(
+        "not allowed to sign certificates" + at,
+        make_chain(depth, {.key_usage = "critical,cRLSign"}));
+    }
+  }
+
+  std::vector<VerificationSettings> all_settings;
+  for (const unsigned long partial_chain : {0, X509_V_FLAG_PARTIAL_CHAIN})
+  {
+    for (const unsigned long self_signature :
+         {0, X509_V_FLAG_CHECK_SS_SIGNATURE})
+    {
+      for (const unsigned long strict : {0, X509_V_FLAG_X509_STRICT})
+      {
+        for (const bool accept_errors : {false, true})
+        {
+          const unsigned long flags = partial_chain | self_signature | strict;
+          all_settings.push_back({flags, accept_errors});
+          all_settings.push_back(
+            {flags | X509_V_FLAG_NO_CHECK_TIME, accept_errors});
+          // The last second of the leaf's validity period, and the next two
+          for (const time_t after : {-1, 0, 1})
+          {
+            all_settings.push_back(
+              {flags, accept_errors, leaf_not_after + after});
+          }
+        }
+      }
+    }
+  }
+
+  // Shared between all verifications, and warm for the second pass
+  CountingSignatureCache cache;
+  VerificationComparison comparison;
+  for (int pass = 0; pass < 2; ++pass)
+  {
+    for (const auto& [name, pems] : chains)
+    {
+      for (const auto& settings : all_settings)
+      {
+        const auto expected = report_verification(pems, settings, nullptr);
+        if (report_verification(pems, settings, &cache) != expected)
+        {
+          std::cerr << name << ", flags 0x" << std::hex << settings.flags
+                    << std::dec << ", accepting errors "
+                    << settings.accept_errors << ", at time "
+                    << settings.check_time.value_or(0)
+                    << ": not as reported by OpenSSL\n";
+          ++comparison.different;
+        }
+        const bool accepted =
+          expected.result == 1 && expected.error == X509_V_OK;
+        comparison.accepted += accepted ? 1 : 0;
+        comparison.rejected += accepted ? 0 : 1;
+      }
+    }
+  }
+  comparison.cache_hits = cache.hits;
+  return comparison;
+}
+
+TEST_CASE("Signature cache verification reports the same as OpenSSL's")
+{
+  const auto comparison = compare_verification_with_and_without_cache();
+  CHECK(comparison.different == 0);
+  CHECK(comparison.accepted > 0);
+  CHECK(comparison.rejected > 0);
+  CHECK(comparison.cache_hits > 0);
 }
 }
 

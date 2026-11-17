@@ -1480,7 +1480,9 @@ namespace didx509
       return X509_STORE_CTX_get_verify_cb(ctx)(0, ctx);
     }
 
-    /// OpenSSL's ossl_x509_check_cert_time, for a certificate in the chain
+    /// OpenSSL's ossl_x509_check_cert_time, for a certificate in the chain.
+    /// OpenSSL 4.0 compares validity periods differently, accepting a
+    /// certificate at its notAfter time, see X509_check_certificate_times().
     inline int verify_cert_time(X509_STORE_CTX* ctx, X509* cert, int depth)
     {
       X509_VERIFY_PARAM* param = X509_STORE_CTX_get0_param(ctx);
@@ -1529,7 +1531,12 @@ namespace didx509
       return 1;
     }
 
-    /// OpenSSL's ossl_x509_signing_allowed
+    /// OpenSSL's ossl_x509_signing_allowed. X509_get_key_usage() is 0 for an
+    /// issuer with an extension that OpenSSL cannot parse, which is then not
+    /// allowed to sign, where OpenSSL goes by the key usage it did parse. Chain
+    /// building never uses such a certificate as an issuer, so this only
+    /// applies to the self-signature of a certificate that is a chain by
+    /// itself.
     inline int signing_allowed(X509* issuer, X509* subject)
     {
       if ((X509_get_extension_flags(subject) & EXFLAG_PROXY) != 0)
@@ -1546,7 +1553,7 @@ namespace didx509
     /// Replaces the last step of X509_verify_cert, which checks signatures and
     /// validity periods once the chain is built and checked, with a port of
     /// OpenSSL's internal_verify (crypto/x509/x509_vfy.c, the same from 3.3 to
-    /// 3.5) to its public API, which consults the SignatureCache set as the
+    /// 3.6) to its public API, which consults the SignatureCache set as the
     /// context's app data. DANE and raw public keys, which are not used here,
     /// are not supported. The issuer is not recorded on the context at each
     /// depth, as OpenSSL offers no way to, and the verify callback used here
@@ -1569,9 +1576,11 @@ namespace didx509
       X509* xs = xi;
       X509_STORE_CTX_set_error_depth(ctx, n);
 
-      // EXFLAG_SS is set when ossl_x509_likely_issued(xi, xi) is X509_V_OK
+      // ossl_x509_likely_issued(xi, xi) is X509_V_OK when EXFLAG_SS is set and
+      // the extensions of xi could be parsed
       if (
-        (X509_get_extension_flags(xi) & EXFLAG_SS) == 0 &&
+        (X509_get_extension_flags(xi) & (EXFLAG_SS | EXFLAG_INVALID)) !=
+          EXFLAG_SS &&
         (flags & X509_V_FLAG_PARTIAL_CHAIN) == 0)
       {
         if (n > 0)
