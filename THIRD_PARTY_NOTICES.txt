@@ -4,14 +4,17 @@ This software incorporates material from the third party listed below.
 
 -------------------------------------------------------------------
 
-OpenSSL 3.5.5 (https://github.com/openssl/openssl) - Apache-2.0
+OpenSSL (https://github.com/openssl/openssl) - Apache-2.0
 
 In didx509cpp.h, verify_cb_cert, verify_cert_time and
 verify_with_signature_cache are adapted from verify_cb_cert,
 ossl_x509_check_cert_time and internal_verify in crypto/x509/x509_vfy.c, and
 signing_allowed is adapted from ossl_x509_signing_allowed in
-crypto/x509/v3_purp.c. They were changed to use OpenSSL's public API, and to
-consult a SignatureCache.
+crypto/x509/v3_purp.c. Those are the same in OpenSSL 3.3.7 and 3.5.5. They were
+changed to use OpenSSL's public API, and to consult a SignatureCache.
+
+The notices that follow are those of the two files in OpenSSL 3.5.5, and the
+License is the LICENSE.txt of that release.
 
 crypto/x509/x509_vfy.c:
 
