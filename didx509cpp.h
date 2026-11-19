@@ -3,7 +3,9 @@
 
 #pragma once
 
+#include <algorithm>
 #include <array>
+#include <cstddef>
 #include <cstdint>
 #include <cstdlib>
 #include <cstring>
@@ -52,9 +54,11 @@ namespace didx509
   /// that key. Every other check, such as key usage or validity periods, is
   /// still made on every verification.
   ///
-  /// Called from within OpenSSL, so implementations must not throw. They must
-  /// be safe to call concurrently if shared between threads, and should bound
-  /// their size.
+  /// FixedCapacitySignatureCache is an implementation. Others must only report
+  /// a key as recorded if that exact key was given to insert(), as a signature
+  /// reported as recorded is not checked. They are called from within OpenSSL,
+  /// so must not throw. They must be safe to call concurrently if shared
+  /// between threads, and should bound their size.
   class SignatureCache
   {
   public:
@@ -74,6 +78,85 @@ namespace didx509
     /// the certificate it is on, 0 being the leaf, so that an implementation
     /// can choose to only record those of issuers.
     virtual void insert(const Key& key, int depth) noexcept = 0;
+  };
+
+  /// A SignatureCache of at most capacity entries, of 72 bytes each. They are
+  /// all allocated on construction, and nothing is allocated afterwards.
+  ///
+  /// A key can only be held in a few of the entries, chosen from the key. When
+  /// they are all in use, the least recently used of them is replaced, so a
+  /// signature that is no longer recorded is checked again. Keys are compared
+  /// in full.
+  ///
+  /// Not safe to call concurrently, so that no lock is taken. Give each thread
+  /// its own, for example as a thread_local variable.
+  class FixedCapacitySignatureCache : public SignatureCache
+  {
+  public:
+    explicit FixedCapacitySignatureCache(size_t capacity) : entries(capacity) {}
+
+    [[nodiscard]] bool contains(const Key& key) noexcept override
+    {
+      Entry* entry = entry_for(key);
+      if (entry == nullptr || entry->last_used == 0 || entry->key != key)
+      {
+        return false;
+      }
+      entry->last_used = ++uses;
+      return true;
+    }
+
+    void insert(const Key& key, int /*depth*/) noexcept override
+    {
+      Entry* entry = entry_for(key);
+      if (entry != nullptr)
+      {
+        entry->key = key;
+        entry->last_used = ++uses;
+      }
+    }
+
+  private:
+    struct Entry
+    {
+      Key key{};
+      // Value of uses when last used, 0 if the entry is not in use
+      uint64_t last_used = 0;
+    };
+
+    // How many entries a key can be held in
+    static constexpr size_t ways = 8;
+
+    // The entry holding key, or else the one to hold it in: of those it can be
+    // held in, one not in use, or else the least recently used.
+    Entry* entry_for(const Key& key) noexcept
+    {
+      if (entries.empty())
+      {
+        return nullptr;
+      }
+      // Keys are digests, so any of their bytes will do
+      uint64_t hash = 0;
+      std::memcpy(&hash, key.data(), sizeof(hash));
+      const size_t first = hash % entries.size();
+      Entry* oldest = nullptr;
+      for (size_t i = 0; i < std::min(ways, entries.size()); ++i)
+      {
+        Entry& entry = entries[(first + i) % entries.size()];
+        if (entry.last_used != 0 && entry.key == key)
+        {
+          return &entry;
+        }
+        if (oldest == nullptr || entry.last_used < oldest->last_used)
+        {
+          oldest = &entry;
+        }
+      }
+      return oldest;
+    }
+
+    std::vector<Entry> entries;
+    uint64_t uses = 0;
   };
 
   namespace

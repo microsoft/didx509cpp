@@ -32,6 +32,7 @@
 #include <stdexcept>
 #include <string>
 #include <string_view>
+#include <thread>
 #include <utility>
 #include <vector>
 
@@ -1528,14 +1529,12 @@ std::string resolve_outcome(
   }
 }
 
-// Whether resolving every specification vector with a cache gives the same
-// outcome as without, and the cache was used. One cache is shared by every
-// vector, as a service would share it between requests, so that later vectors
-// also see the entries of earlier ones. The second pass sees every entry
-// recorded by the first.
-bool cache_preserves_specification_vector_outcomes()
+// Whether resolving every specification vector with cache gives the same
+// outcome as without. The cache is shared by every vector, as a service would
+// share it between requests, so that later vectors also see the entries of
+// earlier ones. The second pass sees the entries recorded by the first.
+bool cache_preserves_specification_vector_outcomes(SignatureCache& cache)
 {
-  CountingSignatureCache cache;
   size_t different_outcomes = 0;
   for (int pass = 0; pass < 2; ++pass)
   {
@@ -1553,12 +1552,14 @@ bool cache_preserves_specification_vector_outcomes()
       }
     }
   }
-  return different_outcomes == 0 && cache.hits > 0;
+  return different_outcomes == 0;
 }
 
 TEST_CASE("Signature cache does not change specification vector outcomes")
 {
-  CHECK(cache_preserves_specification_vector_outcomes());
+  CountingSignatureCache cache;
+  CHECK(cache_preserves_specification_vector_outcomes(cache));
+  CHECK(cache.hits > 0);
 }
 
 TEST_CASE("Signature cache skips checks already made")
@@ -2005,6 +2006,195 @@ TEST_CASE("Signature cache verification reports the same as OpenSSL's")
   CHECK(comparison.accepted > 0);
   CHECK(comparison.rejected > 0);
   CHECK(comparison.cache_hits > 0);
+}
+
+// A distinct key for each n, with every byte depending on n
+SignatureCache::Key test_cache_key(uint32_t n)
+{
+  const auto digest = sha256(
+    {static_cast<uint8_t>(n),
+     static_cast<uint8_t>(n >> 8),
+     static_cast<uint8_t>(n >> 16),
+     static_cast<uint8_t>(n >> 24)});
+  SignatureCache::Key key{};
+  std::copy(digest.begin(), digest.end(), key.begin());
+  std::copy(digest.begin(), digest.end(), key.begin() + digest.size());
+  return key;
+}
+
+TEST_CASE("Fixed capacity signature cache compares keys in full")
+{
+  FixedCapacitySignatureCache cache(16);
+  const auto key = test_cache_key(0);
+  CHECK_FALSE(cache.contains(key));
+  // Not even the key that unused entries are initialised with
+  CHECK_FALSE(cache.contains(SignatureCache::Key{}));
+  cache.insert(key, 0);
+  CHECK(cache.contains(key));
+
+  // A key that differs in any one byte is another key
+  size_t found = 0;
+  for (size_t i = 0; i < key.size(); ++i)
+  {
+    auto other = key;
+    other.at(i) ^= 0x01;
+    found += cache.contains(other) ? 1 : 0;
+  }
+  CHECK(found == 0);
+  CHECK(cache.contains(key));
+}
+
+TEST_CASE("Fixed capacity signature cache holds at most its capacity")
+{
+  constexpr uint32_t inserted = 1000;
+  for (const size_t capacity : {0, 1, 3, 8, 100})
+  {
+    FixedCapacitySignatureCache cache(capacity);
+    for (uint32_t n = 0; n < inserted; ++n)
+    {
+      cache.insert(test_cache_key(n), 0);
+    }
+    size_t held = 0;
+    size_t held_of_last_inserted = 0;
+    for (uint32_t n = 0; n < inserted; ++n)
+    {
+      const bool found = cache.contains(test_cache_key(n));
+      held += found ? 1 : 0;
+      held_of_last_inserted += found && n >= inserted - capacity ? 1 : 0;
+    }
+    CAPTURE(capacity);
+    CHECK(held <= capacity);
+    // Not much of it is left unused
+    CHECK(held * 10 >= capacity * 9);
+    if (capacity <= 8)
+    {
+      // A key can be held in any of so few entries, so these are exactly the
+      // last ones inserted
+      CHECK(held_of_last_inserted == capacity);
+    }
+  }
+}
+
+TEST_CASE("Fixed capacity signature cache replaces the least recently used")
+{
+  // Keys with the same first bytes can be held in the same 8 entries
+  const auto key = [](uint8_t n) {
+    SignatureCache::Key k{};
+    k.back() = n;
+    return k;
+  };
+  FixedCapacitySignatureCache cache(100);
+  for (uint8_t n = 1; n <= 8; ++n)
+  {
+    cache.insert(key(n), 0);
+  }
+  // 1 is now the most recently used, and 2 the least
+  CHECK(cache.contains(key(1)));
+  cache.insert(key(9), 0);
+
+  std::vector<uint8_t> held;
+  for (uint8_t n = 1; n <= 9; ++n)
+  {
+    if (cache.contains(key(n)))
+    {
+      held.push_back(n);
+    }
+  }
+  CHECK(held == std::vector<uint8_t>{1, 3, 4, 5, 6, 7, 8, 9});
+}
+
+class CountingFixedCapacitySignatureCache : public FixedCapacitySignatureCache
+{
+public:
+  using FixedCapacitySignatureCache::FixedCapacitySignatureCache;
+
+  bool contains(const Key& key) noexcept override
+  {
+    const bool found = FixedCapacitySignatureCache::contains(key);
+    hits += found ? 1 : 0;
+    return found;
+  }
+
+  size_t hits = 0;
+};
+
+TEST_CASE("Fixed capacity signature cache skips checks already made")
+{
+  const auto pems =
+    split_x509_cert_bundle(load_certificate_chain("ms-code-signing.pem"));
+  const auto* did =
+    "did:x509:0:sha256:hH32p4SXlD8n_HLrk_mmNzIKArVh0KkbCeh6eAftfGE"
+    "::subject:CN:Microsoft%20Corporation";
+
+  CountingFixedCapacitySignatureCache cache(16);
+  CHECK(resolve_outcome(pems, did, true, &cache) == "ok");
+  CHECK(cache.hits == 0);
+  CHECK(resolve_outcome(pems, did, true, &cache) == "ok");
+  CHECK(cache.hits == 3);
+
+  // One that holds nothing checks every signature every time
+  CountingFixedCapacitySignatureCache empty(0);
+  CHECK(resolve_outcome(pems, did, true, &empty) == "ok");
+  CHECK(resolve_outcome(pems, did, true, &empty) == "ok");
+  CHECK(empty.hits == 0);
+}
+
+TEST_CASE(
+  "Fixed capacity signature cache does not change specification vector "
+  "outcomes")
+{
+  // Small enough that entries are replaced all the time, and large enough to
+  // hold them all
+  for (const size_t capacity : {2, 4096})
+  {
+    CountingFixedCapacitySignatureCache cache(capacity);
+    CAPTURE(capacity);
+    CHECK(cache_preserves_specification_vector_outcomes(cache));
+    CHECK(cache.hits > 0);
+  }
+}
+
+// Each thread has its own, so it needs no lock
+CountingFixedCapacitySignatureCache& thread_signature_cache()
+{
+  thread_local CountingFixedCapacitySignatureCache cache(16);
+  return cache;
+}
+
+TEST_CASE("Fixed capacity signature cache as a thread_local variable")
+{
+  const auto pems =
+    split_x509_cert_bundle(load_certificate_chain("ms-code-signing.pem"));
+  const std::string did =
+    "did:x509:0:sha256:hH32p4SXlD8n_HLrk_mmNzIKArVh0KkbCeh6eAftfGE"
+    "::subject:CN:Microsoft%20Corporation";
+  constexpr size_t thread_count = 4;
+  constexpr size_t resolutions = 20;
+
+  std::vector<size_t> failures(thread_count);
+  std::vector<size_t> hits(thread_count);
+  std::vector<std::thread> threads;
+  for (size_t t = 0; t < thread_count; ++t)
+  {
+    threads.emplace_back([&, t]() {
+      for (size_t i = 0; i < resolutions; ++i)
+      {
+        const auto outcome =
+          resolve_outcome(pems, did, true, &thread_signature_cache());
+        failures.at(t) += outcome == "ok" ? 0 : 1;
+      }
+      hits.at(t) = thread_signature_cache().hits;
+    });
+  }
+  for (auto& thread : threads)
+  {
+    thread.join();
+  }
+
+  // Every thread started with nothing recorded, and then found the three
+  // signatures of the chain on every resolution but its first.
+  CHECK(failures == std::vector<size_t>(thread_count, 0));
+  CHECK(hits == std::vector<size_t>(thread_count, 3 * (resolutions - 1)));
 }
 }
 
