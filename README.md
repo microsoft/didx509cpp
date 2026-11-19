@@ -169,6 +169,13 @@ how entries are stored, bounded and evicted, and must be safe to call
 concurrently if shared between threads. Its methods are called from within
 OpenSSL and must not throw.
 
+## Third-party notices
+
+The verification step used with a signature cache is adapted from OpenSSL,
+under the Apache License 2.0. See
+[THIRD_PARTY_NOTICES.txt](THIRD_PARTY_NOTICES.txt), which must be kept with
+`didx509cpp.h` when it is redistributed.
+
 ## Contributing
 
 To run clang-tidy locally, configure with Clang 18 and enable the opt-in

@@ -1,5 +1,9 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT License.
+//
+// verify_cb_cert, verify_cert_time, signing_allowed and
+// verify_with_signature_cache are adapted from OpenSSL, under the Apache
+// License 2.0. See the notice above them, and THIRD_PARTY_NOTICES.txt.
 
 #pragma once
 
@@ -1551,6 +1555,24 @@ namespace didx509
       }
       return true;
     }
+
+    // The four functions that follow are adapted from OpenSSL 3.5.5:
+    // verify_cb_cert, verify_cert_time and verify_with_signature_cache from
+    // verify_cb_cert, ossl_x509_check_cert_time and internal_verify in
+    // crypto/x509/x509_vfy.c, and signing_allowed from
+    // ossl_x509_signing_allowed in crypto/x509/v3_purp.c. They were changed to
+    // use OpenSSL's public API, and to consult a SignatureCache. Those files
+    // carry these notices:
+    //
+    //   Copyright 1995-2025 The OpenSSL Project Authors. All Rights Reserved.
+    //   Copyright 1999-2025 The OpenSSL Project Authors. All Rights Reserved.
+    //
+    //   Licensed under the Apache License 2.0 (the "License").  You may not use
+    //   this file except in compliance with the License.  You can obtain a copy
+    //   in the file LICENSE in the source distribution or at
+    //   https://www.openssl.org/source/license.html
+    //
+    // A copy of that License is in THIRD_PARTY_NOTICES.txt.
 
     /// Reports an error as OpenSSL's verify_cb_cert does, returning 0 unless
     /// the verify callback overrides it.
