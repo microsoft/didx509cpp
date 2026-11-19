@@ -1626,6 +1626,8 @@ void add_test_extension(X509* cert, X509V3_CTX* ctx, int nid, const char* value)
 struct TestCertificateOptions
 {
   bool authority_key_id = true;
+  // Defaults to a year ago
+  std::optional<time_t> not_before = std::nullopt;
   // Defaults to a year from now
   std::optional<time_t> not_after = std::nullopt;
   // Defaults to what a CA or a leaf needs
@@ -1648,7 +1650,15 @@ std::string make_test_certificate(
   X509* x = cert.get();
   CHECK1(X509_set_version(x, X509_VERSION_3));
   CHECK1(ASN1_INTEGER_set(X509_get_serialNumber(x), serial++));
-  CHECKNULL(X509_gmtime_adj(X509_getm_notBefore(x), -one_year_s));
+  if (options.not_before.has_value())
+  {
+    time_t not_before = *options.not_before;
+    CHECKNULL(X509_time_adj(X509_getm_notBefore(x), 0, &not_before));
+  }
+  else
+  {
+    CHECKNULL(X509_gmtime_adj(X509_getm_notBefore(x), -one_year_s));
+  }
   if (options.not_after.has_value())
   {
     time_t not_after = *options.not_after;
@@ -1895,7 +1905,12 @@ VerificationComparison compare_verification_with_and_without_cache()
   const TestKey intermediate_key;
   const TestKey leaf_key;
   const time_t now = time(nullptr);
+  const time_t leaf_not_before = now - 3600;
   const time_t leaf_not_after = now + 3600;
+  const TestCertificateOptions leaf_options{
+    .not_before = leaf_not_before, .not_after = leaf_not_after};
+  // Other certificates are valid from a year ago
+  constexpr time_t two_years_s = 2 * 365L * 24 * 60 * 60;
 
   // A leaf, an intermediate and a root, with the one at depth made with options
   const auto make_chain =
@@ -1920,12 +1935,11 @@ VerificationComparison compare_verification_with_and_without_cache()
         intermediate,
         intermediate_key,
         false,
-        depth == 0 ? options :
-                     TestCertificateOptions{.not_after = leaf_not_after});
+        depth == 0 ? options : leaf_options);
       return std::vector<std::string>{leaf, intermediate, root};
     };
 
-  const auto valid = make_chain(0, {.not_after = leaf_not_after});
+  const auto valid = make_chain(0, leaf_options);
   std::vector<std::pair<std::string, std::vector<std::string>>> chains = {
     {"valid", valid}, {"without its root", {valid[0], valid[1]}}};
   for (size_t depth = 0; depth < valid.size(); ++depth)
@@ -1936,6 +1950,8 @@ VerificationComparison compare_verification_with_and_without_cache()
     chains.emplace_back("corrupted signature" + at, corrupted);
     chains.emplace_back(
       "expired" + at, make_chain(depth, {.not_after = now - 3600}));
+    chains.emplace_back(
+      "not yet valid" + at, make_chain(depth, {.not_before = now + 3600}));
     if (depth > 0)
     {
       chains.emplace_back(
@@ -1958,12 +1974,17 @@ VerificationComparison compare_verification_with_and_without_cache()
           all_settings.push_back({flags, accept_errors});
           all_settings.push_back(
             {flags | X509_V_FLAG_NO_CHECK_TIME, accept_errors});
-          // The last second of the leaf's validity period, and the next two
-          for (const time_t after : {-1, 0, 1})
+          // The start and the end of the leaf's validity period, and a second
+          // before and after each
+          for (const time_t edge : {leaf_not_before, leaf_not_after})
           {
-            all_settings.push_back(
-              {flags, accept_errors, leaf_not_after + after});
+            for (const time_t offset : {-1, 0, 1})
+            {
+              all_settings.push_back({flags, accept_errors, edge + offset});
+            }
           }
+          // Before the validity period of every certificate
+          all_settings.push_back({flags, accept_errors, now - two_years_s});
         }
       }
     }
