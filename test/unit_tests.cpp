@@ -4,23 +4,35 @@
 #include "didx509cpp.h"
 
 #include <algorithm>
+#include <array>
 #include <bit>
 #include <cctype>
 #include <cstddef>
 #include <cstdint>
 #include <cstring>
+#include <ctime>
+#include <exception>
 #include <fstream>
 #include <initializer_list>
+#include <iostream>
 #include <memory>
 #include <openssl/asn1.h>
+#include <openssl/ec.h>
 #include <openssl/evp.h>
+#include <openssl/obj_mac.h>
 #include <openssl/ossl_typ.h>
 #include <openssl/pem.h>
+#include <openssl/safestack.h>
 #include <openssl/x509.h>
+#include <openssl/x509_vfy.h>
+#include <openssl/x509v3.h>
+#include <optional>
+#include <set>
 #include <sstream>
 #include <stdexcept>
 #include <string>
 #include <string_view>
+#include <thread>
 #include <utility>
 #include <vector>
 
@@ -1512,6 +1524,735 @@ TEST_CASE("TestEd25519NonCanonicalKey")
   test_resolve_error(chain, did, error);
   test_resolve_jwk_error(split_x509_cert_bundle(chain), did, error); // NOLINT(clang-analyzer-cplusplus.NewDeleteLeaks)
 } // NOLINT(clang-analyzer-cplusplus.NewDeleteLeaks)
+
+class CountingSignatureCache : public SignatureCache
+{
+public:
+  bool contains(const Key& key) noexcept override
+  {
+    const bool found = keys.contains(key);
+    hits += found ? 1 : 0;
+    return found;
+  }
+
+  void insert(const Key& key, int depth) noexcept override
+  {
+    keys.insert(key);
+    inserted_depths.push_back(depth);
+  }
+
+  std::set<Key> keys;
+  std::vector<int> inserted_depths;
+  size_t hits = 0;
+};
+
+// The outcome of resolve_chain(), as either "ok" or the error it throws.
+std::string resolve_outcome(
+  const std::vector<std::string>& pems,
+  const std::string& did,
+  bool ignore_time,
+  SignatureCache* cache)
+{
+  try
+  {
+    const UqSTACK_OF_X509 chain(pems);
+    (void)resolve_chain(chain, did, ignore_time, cache);
+    return "ok";
+  }
+  catch (const std::exception& e)
+  {
+    return e.what();
+  }
+}
+
+// Whether resolving every specification vector with cache gives the same
+// outcome as without. The cache is shared by every vector, as a service would
+// share it between requests, so that later vectors also see the entries of
+// earlier ones. The second pass sees the entries recorded by the first.
+bool cache_preserves_specification_vector_outcomes(SignatureCache& cache)
+{
+  size_t different_outcomes = 0;
+  for (int pass = 0; pass < 2; ++pass)
+  {
+    for (const auto& vector : specification_test_vectors())
+    {
+      const auto pems = vector_certificate_chain(vector);
+      const auto did = vector.at("input").at("did").get<std::string>();
+      const auto cached = resolve_outcome(pems, did, true, &cache);
+      const auto uncached = resolve_outcome(pems, did, true, nullptr);
+      if (cached != uncached)
+      {
+        std::cerr << vector.at("id").get<std::string>() << ": with cache \""
+                  << cached << "\", without \"" << uncached << "\"\n";
+        ++different_outcomes;
+      }
+    }
+  }
+  return different_outcomes == 0;
+}
+
+TEST_CASE("Signature cache does not change specification vector outcomes")
+{
+  CountingSignatureCache cache;
+  CHECK(cache_preserves_specification_vector_outcomes(cache));
+  CHECK(cache.hits > 0);
+}
+
+TEST_CASE("Signature cache skips checks already made")
+{
+  const auto pems =
+    split_x509_cert_bundle(load_certificate_chain("ms-code-signing.pem"));
+  const auto* did =
+    "did:x509:0:sha256:hH32p4SXlD8n_HLrk_mmNzIKArVh0KkbCeh6eAftfGE"
+    "::subject:CN:Microsoft%20Corporation";
+  CountingSignatureCache cache;
+
+  CHECK(resolve_outcome(pems, did, true, &cache) == "ok");
+  // The leaf and intermediate signatures, and the root's self-signature,
+  // which is checked because X509_V_FLAG_CHECK_SS_SIGNATURE is set.
+  CHECK(cache.inserted_depths == std::vector<int>{2, 1, 0});
+  CHECK(cache.hits == 0);
+
+  CHECK(resolve_outcome(pems, did, true, &cache) == "ok");
+  CHECK(cache.hits == 3);
+  CHECK(cache.inserted_depths.size() == 3);
+
+  // Also through resolve() and resolve_jwk()
+  std::string pem_chain;
+  for (const auto& pem : pems)
+  {
+    pem_chain += pem + "\n";
+  }
+  CHECK(resolve(pem_chain, did, true, &cache) == resolve(pem_chain, did, true));
+  CHECK(resolve_jwk(pems, did, true, &cache) == resolve_jwk(pems, did, true));
+  CHECK(cache.hits == 9);
+  CHECK(cache.inserted_depths.size() == 3);
+}
+
+TEST_CASE("Signature cache still enforces validity periods")
+{
+  const auto& vector =
+    specification_test_vector("certificate-validity-periods-are-not-checked");
+  const auto did = vector.at("input").at("did").get<std::string>();
+  const auto pems = vector_certificate_chain(vector);
+  CountingSignatureCache cache;
+  REQUIRE(resolve_outcome(pems, did, true, &cache) == "ok");
+  REQUIRE(resolve_outcome(pems, did, true, &cache) == "ok");
+  REQUIRE(cache.hits > 0);
+
+  const auto uncached = resolve_outcome(pems, did, false, nullptr);
+  CHECK(uncached.find("certificate has expired") != std::string::npos);
+  CHECK(resolve_outcome(pems, did, false, &cache) == uncached);
+}
+
+struct TestKey
+{
+  std::shared_ptr<EVP_PKEY> pkey{EVP_EC_gen("P-256"), EVP_PKEY_free};
+};
+
+void add_test_extension(X509* cert, X509V3_CTX* ctx, int nid, const char* value)
+{
+  X509_EXTENSION* ext = X509V3_EXT_conf_nid(nullptr, ctx, nid, value);
+  CHECKNULL(ext);
+  const int rc = X509_add_ext(cert, ext, -1);
+  X509_EXTENSION_free(ext);
+  CHECK1(rc);
+}
+
+struct TestCertificateOptions
+{
+  bool authority_key_id = true;
+  // Defaults to a year ago
+  std::optional<time_t> not_before = std::nullopt;
+  // Defaults to a year from now
+  std::optional<time_t> not_after = std::nullopt;
+  // Defaults to what a CA or a leaf needs
+  const char* key_usage = nullptr;
+};
+
+// A PEM certificate for subject_key, issued by issuer with signing_key, or
+// self-signed if issuer is empty.
+std::string make_test_certificate(
+  const std::string& cn,
+  const TestKey& subject_key,
+  const std::string& issuer,
+  const TestKey& signing_key,
+  bool ca,
+  const TestCertificateOptions& options = {})
+{
+  static long serial = 1;
+  constexpr long one_year_s = 365L * 24 * 60 * 60;
+  const std::unique_ptr<X509, decltype(&X509_free)> cert(X509_new(), X509_free);
+  X509* x = cert.get();
+  CHECK1(X509_set_version(x, X509_VERSION_3));
+  CHECK1(ASN1_INTEGER_set(X509_get_serialNumber(x), serial++));
+  if (options.not_before.has_value())
+  {
+    time_t not_before = *options.not_before;
+    CHECKNULL(X509_time_adj(X509_getm_notBefore(x), 0, &not_before));
+  }
+  else
+  {
+    CHECKNULL(X509_gmtime_adj(X509_getm_notBefore(x), -one_year_s));
+  }
+  if (options.not_after.has_value())
+  {
+    time_t not_after = *options.not_after;
+    CHECKNULL(X509_time_adj(X509_getm_notAfter(x), 0, &not_after));
+  }
+  else
+  {
+    CHECKNULL(X509_gmtime_adj(X509_getm_notAfter(x), one_year_s));
+  }
+  CHECK1(X509_set_pubkey(x, subject_key.pkey.get()));
+  CHECK1(X509_NAME_add_entry_by_txt(
+    X509_get_subject_name(x),
+    "CN",
+    MBSTRING_UTF8,
+    std::bit_cast<const unsigned char*>(cn.c_str()),
+    -1,
+    -1,
+    0));
+  std::optional<UqX509> issuer_cert;
+  if (!issuer.empty())
+  {
+    issuer_cert.emplace(issuer);
+  }
+  X509* signer = issuer_cert.has_value() ? static_cast<X509*>(*issuer_cert) : x;
+  CHECK1(X509_set_issuer_name(x, X509_get_subject_name(signer)));
+
+  X509V3_CTX ctx;
+  X509V3_set_ctx_nodb(&ctx);
+  X509V3_set_ctx(&ctx, signer, x, nullptr, nullptr, 0);
+  add_test_extension(
+    x,
+    &ctx,
+    NID_basic_constraints,
+    ca ? "critical,CA:TRUE" : "critical,CA:FALSE");
+  const char* default_key_usage =
+    ca ? "critical,keyCertSign" : "critical,digitalSignature";
+  add_test_extension(
+    x,
+    &ctx,
+    NID_key_usage,
+    options.key_usage != nullptr ? options.key_usage : default_key_usage);
+  add_test_extension(x, &ctx, NID_subject_key_identifier, "hash");
+  if (options.authority_key_id)
+  {
+    add_test_extension(x, &ctx, NID_authority_key_identifier, "keyid:always");
+  }
+  if (X509_sign(x, signing_key.pkey.get(), EVP_sha256()) <= 0)
+  {
+    throw std::runtime_error("could not sign test certificate");
+  }
+
+  UqBIO pem;
+  CHECK1(PEM_write_bio_X509(pem, x));
+  return pem.to_string();
+}
+
+// The same certificate, with the last bit of its signature flipped
+std::string with_corrupted_signature(const std::string& pem)
+{
+  auto der = UqX509(pem).der();
+  der.back() ^= 0x01;
+  const UqBIO bio(der);
+  const std::unique_ptr<X509, decltype(&X509_free)> cert(
+    d2i_X509_bio(bio, nullptr), X509_free);
+  CHECKNULL(cert.get());
+  UqBIO out;
+  CHECK1(PEM_write_bio_X509(out, cert.get()));
+  return out.to_string();
+}
+
+std::string did_for_root(const std::string& root_pem)
+{
+  return "did:x509:0:sha256:" + to_base64url(sha256(UqX509(root_pem).der())) +
+    "::subject:CN:Test%20Leaf";
+}
+
+TEST_CASE("Signature cache entries are bound to the certificate and key")
+{
+  const TestKey root_key;
+  const TestKey other_root_key;
+  const TestKey intermediate_key;
+  const TestKey leaf_key;
+  const auto root =
+    make_test_certificate("Test Root", root_key, "", root_key, true);
+  // Same name as the root, but another key
+  const auto other_root = make_test_certificate(
+    "Test Root", other_root_key, "", other_root_key, true);
+  // Without an authority key identifier, so that path building accepts either
+  // root as its issuer and only the signature check tells them apart.
+  const auto intermediate = make_test_certificate(
+    "Test Intermediate",
+    intermediate_key,
+    root,
+    root_key,
+    true,
+    {.authority_key_id = false});
+  const auto leaf = make_test_certificate(
+    "Test Leaf", leaf_key, intermediate, intermediate_key, false);
+
+  const std::vector<std::string> valid = {leaf, intermediate, root};
+  CountingSignatureCache cache;
+  REQUIRE(resolve_outcome(valid, did_for_root(root), true, &cache) == "ok");
+  REQUIRE(resolve_outcome(valid, did_for_root(root), true, &cache) == "ok");
+  REQUIRE(cache.hits == 3);
+
+  struct Case
+  {
+    const char* name;
+    std::vector<std::string> pems;
+    size_t failing_depth;
+  };
+  const std::vector<Case> cases = {
+    {"leaf signature", {with_corrupted_signature(leaf), intermediate, root}, 0},
+    {"intermediate signature",
+     {leaf, with_corrupted_signature(intermediate), root},
+     1},
+    {"root self-signature",
+     {leaf, intermediate, with_corrupted_signature(root)},
+     2},
+    {"intermediate under a root with the same name and another key",
+     {leaf, intermediate, other_root},
+     1}};
+  for (const auto& c : cases)
+  {
+    CAPTURE(c.name);
+    const auto did = did_for_root(c.pems.back());
+    const auto uncached = resolve_outcome(c.pems, did, true, nullptr);
+    CHECK(uncached.find("certificate signature failure") != std::string::npos);
+    CHECK(resolve_outcome(c.pems, did, true, &cache) == uncached);
+
+    // The failed check was not recorded
+    const UqX509 subject(c.pems[c.failing_depth]);
+    const UqX509 issuer(
+      c.pems[std::min(c.failing_depth + 1, c.pems.size() - 1)]);
+    SignatureCache::Key key{};
+    REQUIRE(signature_cache_key(subject, issuer, key));
+    CHECK_FALSE(cache.keys.contains(key));
+  }
+}
+
+// What a chain verification reports: its result, and every call of the verify
+// callback as {ok, error, depth, position of the certificate in the chain}.
+struct VerificationReport
+{
+  int result = 0;
+  int error = 0;
+  int error_depth = 0;
+  std::vector<std::array<int, 4>> callbacks;
+
+  bool operator==(const VerificationReport&) const = default;
+};
+
+struct VerifyCallbackState
+{
+  VerificationReport report;
+  bool accept_errors = false;
+};
+
+int verify_callback_state_index()
+{
+  static const int index =
+    X509_STORE_CTX_get_ex_new_index(0, nullptr, nullptr, nullptr, nullptr);
+  return index;
+}
+
+int reporting_verify_callback(int ok, X509_STORE_CTX* ctx)
+{
+  auto* state = static_cast<VerifyCallbackState*>(
+    X509_STORE_CTX_get_ex_data(ctx, verify_callback_state_index()));
+  STACK_OF(X509)* chain = X509_STORE_CTX_get0_chain(ctx);
+  int position = -1;
+  for (int i = 0; i < sk_X509_num(chain); ++i)
+  {
+    if (sk_X509_value(chain, i) == X509_STORE_CTX_get_current_cert(ctx))
+    {
+      position = i;
+    }
+  }
+  state->report.callbacks.push_back(
+    {ok,
+     X509_STORE_CTX_get_error(ctx),
+     X509_STORE_CTX_get_error_depth(ctx),
+     position});
+  return state->accept_errors ? 1 : ok;
+}
+
+struct VerificationSettings
+{
+  unsigned long flags = 0;
+  // Whether the verify callback lets verification carry on after an error
+  bool accept_errors = false;
+  std::optional<time_t> check_time = std::nullopt;
+};
+
+// Verifies pems, trusting the last one, with verify_with_signature_cache as
+// the last step if cache is given, and with OpenSSL's own otherwise.
+VerificationReport report_verification(
+  const std::vector<std::string>& pems,
+  const VerificationSettings& settings,
+  SignatureCache* cache)
+{
+  const UqSTACK_OF_X509 chain(pems);
+  UqX509_STORE store;
+  store.add(UqX509(pems.back()));
+  const auto target = chain.at(0);
+  UqX509_STORE_CTX ctx;
+  CHECK1(X509_STORE_CTX_init(ctx, store, target, chain));
+  X509_VERIFY_PARAM* param = X509_STORE_CTX_get0_param(ctx);
+  CHECK1(X509_VERIFY_PARAM_set_flags(param, settings.flags));
+  if (settings.check_time.has_value())
+  {
+    X509_VERIFY_PARAM_set_time(param, *settings.check_time);
+  }
+
+  VerifyCallbackState state{{}, settings.accept_errors};
+  CHECK1(
+    X509_STORE_CTX_set_ex_data(ctx, verify_callback_state_index(), &state));
+  X509_STORE_CTX_set_verify_cb(ctx, reporting_verify_callback);
+  if (cache != nullptr)
+  {
+    CHECK1(X509_STORE_CTX_set_app_data(ctx, cache));
+    X509_STORE_CTX_set_verify(ctx, verify_with_signature_cache);
+  }
+  state.report.result = X509_verify_cert(ctx);
+  state.report.error = X509_STORE_CTX_get_error(ctx);
+  state.report.error_depth = X509_STORE_CTX_get_error_depth(ctx);
+  return state.report;
+}
+
+struct VerificationComparison
+{
+  size_t different = 0;
+  size_t accepted = 0;
+  size_t rejected = 0;
+  size_t cache_hits = 0;
+};
+
+// verify_with_signature_cache is a port of a function internal to OpenSSL, so
+// this compares the two directly, including with settings that verify() does
+// not use, to find out if they come apart in a later version of OpenSSL.
+VerificationComparison compare_verification_with_and_without_cache()
+{
+  const TestKey root_key;
+  const TestKey intermediate_key;
+  const TestKey leaf_key;
+  const time_t now = time(nullptr);
+  const time_t leaf_not_before = now - 3600;
+  const time_t leaf_not_after = now + 3600;
+  const TestCertificateOptions leaf_options{
+    .not_before = leaf_not_before, .not_after = leaf_not_after};
+  // Other certificates are valid from a year ago
+  constexpr time_t two_years_s = 2 * 365L * 24 * 60 * 60;
+
+  // A leaf, an intermediate and a root, with the one at depth made with options
+  const auto make_chain =
+    [&](size_t depth, const TestCertificateOptions& options) {
+      const auto root = make_test_certificate(
+        "Test Root",
+        root_key,
+        "",
+        root_key,
+        true,
+        depth == 2 ? options : TestCertificateOptions{});
+      const auto intermediate = make_test_certificate(
+        "Test Intermediate",
+        intermediate_key,
+        root,
+        root_key,
+        true,
+        depth == 1 ? options : TestCertificateOptions{});
+      const auto leaf = make_test_certificate(
+        "Test Leaf",
+        leaf_key,
+        intermediate,
+        intermediate_key,
+        false,
+        depth == 0 ? options : leaf_options);
+      return std::vector<std::string>{leaf, intermediate, root};
+    };
+
+  const auto valid = make_chain(0, leaf_options);
+  std::vector<std::pair<std::string, std::vector<std::string>>> chains = {
+    {"valid", valid}, {"without its root", {valid[0], valid[1]}}};
+  for (size_t depth = 0; depth < valid.size(); ++depth)
+  {
+    const auto at = " at depth " + std::to_string(depth);
+    auto corrupted = valid;
+    corrupted[depth] = with_corrupted_signature(valid[depth]);
+    chains.emplace_back("corrupted signature" + at, corrupted);
+    chains.emplace_back(
+      "expired" + at, make_chain(depth, {.not_after = now - 3600}));
+    chains.emplace_back(
+      "not yet valid" + at, make_chain(depth, {.not_before = now + 3600}));
+    if (depth > 0)
+    {
+      chains.emplace_back(
+        "not allowed to sign certificates" + at,
+        make_chain(depth, {.key_usage = "critical,cRLSign"}));
+    }
+  }
+
+  std::vector<VerificationSettings> all_settings;
+  for (const unsigned long partial_chain : {0, X509_V_FLAG_PARTIAL_CHAIN})
+  {
+    for (const unsigned long self_signature :
+         {0, X509_V_FLAG_CHECK_SS_SIGNATURE})
+    {
+      for (const unsigned long strict : {0, X509_V_FLAG_X509_STRICT})
+      {
+        for (const bool accept_errors : {false, true})
+        {
+          const unsigned long flags = partial_chain | self_signature | strict;
+          all_settings.push_back({flags, accept_errors});
+          all_settings.push_back(
+            {flags | X509_V_FLAG_NO_CHECK_TIME, accept_errors});
+          // The start and the end of the leaf's validity period, and a second
+          // before and after each
+          for (const time_t edge : {leaf_not_before, leaf_not_after})
+          {
+            for (const time_t offset : {-1, 0, 1})
+            {
+              all_settings.push_back({flags, accept_errors, edge + offset});
+            }
+          }
+          // Before the validity period of every certificate
+          all_settings.push_back({flags, accept_errors, now - two_years_s});
+        }
+      }
+    }
+  }
+
+  // Shared between all verifications, and warm for the second pass
+  CountingSignatureCache cache;
+  VerificationComparison comparison;
+  for (int pass = 0; pass < 2; ++pass)
+  {
+    for (const auto& [name, pems] : chains)
+    {
+      for (const auto& settings : all_settings)
+      {
+        const auto expected = report_verification(pems, settings, nullptr);
+        if (report_verification(pems, settings, &cache) != expected)
+        {
+          std::cerr << name << ", flags 0x" << std::hex << settings.flags
+                    << std::dec << ", accepting errors "
+                    << settings.accept_errors << ", at time "
+                    << settings.check_time.value_or(0)
+                    << ": not as reported by OpenSSL\n";
+          ++comparison.different;
+        }
+        const bool accepted =
+          expected.result == 1 && expected.error == X509_V_OK;
+        comparison.accepted += accepted ? 1 : 0;
+        comparison.rejected += accepted ? 0 : 1;
+      }
+    }
+  }
+  comparison.cache_hits = cache.hits;
+  return comparison;
+}
+
+TEST_CASE("Signature cache verification reports the same as OpenSSL's")
+{
+  const auto comparison = compare_verification_with_and_without_cache();
+  CHECK(comparison.different == 0);
+  CHECK(comparison.accepted > 0);
+  CHECK(comparison.rejected > 0);
+  CHECK(comparison.cache_hits > 0);
+}
+
+// A distinct key for each n, with every byte depending on n
+SignatureCache::Key test_cache_key(uint32_t n)
+{
+  const auto digest = sha256(
+    {static_cast<uint8_t>(n),
+     static_cast<uint8_t>(n >> 8),
+     static_cast<uint8_t>(n >> 16),
+     static_cast<uint8_t>(n >> 24)});
+  SignatureCache::Key key{};
+  std::copy(digest.begin(), digest.end(), key.begin());
+  std::copy(digest.begin(), digest.end(), key.begin() + digest.size());
+  return key;
+}
+
+TEST_CASE("Fixed capacity signature cache compares keys in full")
+{
+  FixedCapacitySignatureCache cache(16);
+  const auto key = test_cache_key(0);
+  CHECK_FALSE(cache.contains(key));
+  // Not even the key that unused entries are initialised with
+  CHECK_FALSE(cache.contains(SignatureCache::Key{}));
+  cache.insert(key, 0);
+  CHECK(cache.contains(key));
+
+  // A key that differs in any one byte is another key
+  size_t found = 0;
+  for (size_t i = 0; i < key.size(); ++i)
+  {
+    auto other = key;
+    other.at(i) ^= 0x01;
+    found += cache.contains(other) ? 1 : 0;
+  }
+  CHECK(found == 0);
+  CHECK(cache.contains(key));
+}
+
+TEST_CASE("Fixed capacity signature cache holds at most its capacity")
+{
+  constexpr uint32_t inserted = 1000;
+  for (const size_t capacity : {0, 1, 3, 8, 100})
+  {
+    FixedCapacitySignatureCache cache(capacity);
+    for (uint32_t n = 0; n < inserted; ++n)
+    {
+      cache.insert(test_cache_key(n), 0);
+    }
+    size_t held = 0;
+    size_t held_of_last_inserted = 0;
+    for (uint32_t n = 0; n < inserted; ++n)
+    {
+      const bool found = cache.contains(test_cache_key(n));
+      held += found ? 1 : 0;
+      held_of_last_inserted += found && n >= inserted - capacity ? 1 : 0;
+    }
+    CAPTURE(capacity);
+    CHECK(held <= capacity);
+    // Not much of it is left unused
+    CHECK(held * 10 >= capacity * 9);
+    if (capacity <= 8)
+    {
+      // A key can be held in any of so few entries, so these are exactly the
+      // last ones inserted
+      CHECK(held_of_last_inserted == capacity);
+    }
+  }
+}
+
+TEST_CASE("Fixed capacity signature cache replaces the least recently used")
+{
+  // Keys with the same first bytes can be held in the same 8 entries
+  const auto key = [](uint8_t n) {
+    SignatureCache::Key k{};
+    k.back() = n;
+    return k;
+  };
+  FixedCapacitySignatureCache cache(100);
+  for (uint8_t n = 1; n <= 8; ++n)
+  {
+    cache.insert(key(n), 0);
+  }
+  // 1 is now the most recently used, and 2 the least
+  CHECK(cache.contains(key(1)));
+  cache.insert(key(9), 0);
+
+  std::vector<uint8_t> held;
+  for (uint8_t n = 1; n <= 9; ++n)
+  {
+    if (cache.contains(key(n)))
+    {
+      held.push_back(n);
+    }
+  }
+  CHECK(held == std::vector<uint8_t>{1, 3, 4, 5, 6, 7, 8, 9});
+}
+
+class CountingFixedCapacitySignatureCache : public FixedCapacitySignatureCache
+{
+public:
+  using FixedCapacitySignatureCache::FixedCapacitySignatureCache;
+
+  bool contains(const Key& key) noexcept override
+  {
+    const bool found = FixedCapacitySignatureCache::contains(key);
+    hits += found ? 1 : 0;
+    return found;
+  }
+
+  size_t hits = 0;
+};
+
+TEST_CASE("Fixed capacity signature cache skips checks already made")
+{
+  const auto pems =
+    split_x509_cert_bundle(load_certificate_chain("ms-code-signing.pem"));
+  const auto* did =
+    "did:x509:0:sha256:hH32p4SXlD8n_HLrk_mmNzIKArVh0KkbCeh6eAftfGE"
+    "::subject:CN:Microsoft%20Corporation";
+
+  CountingFixedCapacitySignatureCache cache(16);
+  CHECK(resolve_outcome(pems, did, true, &cache) == "ok");
+  CHECK(cache.hits == 0);
+  CHECK(resolve_outcome(pems, did, true, &cache) == "ok");
+  CHECK(cache.hits == 3);
+
+  // One that holds nothing checks every signature every time
+  CountingFixedCapacitySignatureCache empty(0);
+  CHECK(resolve_outcome(pems, did, true, &empty) == "ok");
+  CHECK(resolve_outcome(pems, did, true, &empty) == "ok");
+  CHECK(empty.hits == 0);
+}
+
+TEST_CASE(
+  "Fixed capacity signature cache does not change specification vector "
+  "outcomes")
+{
+  // Small enough that entries are replaced all the time, and large enough to
+  // hold them all
+  for (const size_t capacity : {2, 4096})
+  {
+    CountingFixedCapacitySignatureCache cache(capacity);
+    CAPTURE(capacity);
+    CHECK(cache_preserves_specification_vector_outcomes(cache));
+    CHECK(cache.hits > 0);
+  }
+}
+
+// Each thread has its own, so it needs no lock
+CountingFixedCapacitySignatureCache& thread_signature_cache()
+{
+  thread_local CountingFixedCapacitySignatureCache cache(16);
+  return cache;
+}
+
+TEST_CASE("Fixed capacity signature cache as a thread_local variable")
+{
+  const auto pems =
+    split_x509_cert_bundle(load_certificate_chain("ms-code-signing.pem"));
+  const std::string did =
+    "did:x509:0:sha256:hH32p4SXlD8n_HLrk_mmNzIKArVh0KkbCeh6eAftfGE"
+    "::subject:CN:Microsoft%20Corporation";
+  constexpr size_t thread_count = 4;
+  constexpr size_t resolutions = 20;
+
+  std::vector<size_t> failures(thread_count);
+  std::vector<size_t> hits(thread_count);
+  std::vector<std::thread> threads;
+  for (size_t t = 0; t < thread_count; ++t)
+  {
+    threads.emplace_back([&, t]() {
+      for (size_t i = 0; i < resolutions; ++i)
+      {
+        const auto outcome =
+          resolve_outcome(pems, did, true, &thread_signature_cache());
+        failures.at(t) += outcome == "ok" ? 0 : 1;
+      }
+      hits.at(t) = thread_signature_cache().hits;
+    });
+  }
+  for (auto& thread : threads)
+  {
+    thread.join();
+  }
+
+  // Every thread started with nothing recorded, and then found the three
+  // signatures of the chain on every resolution but its first.
+  CHECK(failures == std::vector<size_t>(thread_count, 0));
+  CHECK(hits == std::vector<size_t>(thread_count, 3 * (resolutions - 1)));
+}
 }
 
 int main(int argc, char** argv)

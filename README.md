@@ -125,6 +125,64 @@ is absent or includes `digitalSignature`, and `keyAgreement` when Key Usage is
 absent or includes `keyAgreement`. A Key Usage extension with neither is
 rejected.
 
+## Caching signature checks
+
+Services that resolve many chains sharing the same roots and intermediates can
+pass a `didx509::SignatureCache` to `resolve()`, `resolve_jwk()` or
+`resolve_chain()`, so that each of those certificates' signatures is checked
+once rather than on every resolution.
+
+`didx509::FixedCapacitySignatureCache` is one that holds at most the number of
+entries it is constructed with:
+
+```cpp
+thread_local didx509::FixedCapacitySignatureCache cache(1024);
+std::string doc = resolve(pem_chain, did, false, &cache);
+```
+
+It takes no lock, so it must not be shared between threads: give each thread
+its own, as above. Each then checks a signature the first time it sees it. An
+entry takes 72 bytes, all allocated when the cache is constructed, which for a
+`thread_local` variable is when a thread first uses it. One entry is used for
+each certificate of each chain, leaves included. As the cache fills up, a new
+entry replaces one that was not used recently, whose signature is then checked
+again if it is seen again. A capacity of about eight times the number of roots
+and intermediates in regular use keeps nearly all of them recorded while new
+leaves come and go.
+
+An entry is only recorded for a signature that was verified, under a key made
+of the SHA-256 digests of the certificate's DER encoding and of its issuer's
+SubjectPublicKeyInfo, so it only ever applies to that certificate checked with
+that key. Every other check, including Key Usage, validity periods, and the
+trust anchor's self-signature on first use, is still made on every resolution.
+Without a cache, resolution is unchanged.
+
+Other caches can be written by deriving from `didx509::SignatureCache`:
+
+```cpp
+class MyCache : public didx509::SignatureCache
+{
+public:
+  bool contains(const Key& key) noexcept override;
+  void insert(const Key& key, int depth) noexcept override;
+};
+```
+
+`depth` is that of the certificate, 0 for the leaf, so that a cache can choose
+not to record leaves it does not expect to see again. `contains()` must only
+return true for a key that was given to `insert()`, compared in full, because
+a signature it reports as recorded is not checked. The implementation decides
+how entries are stored, bounded and evicted, and must be safe to call
+concurrently if shared between threads. Its methods are called from within
+OpenSSL and must not throw.
+
+## Third-party notices
+
+The verification step used with a signature cache is adapted from OpenSSL,
+under the Apache License 2.0. See
+[THIRD_PARTY_NOTICES.txt](THIRD_PARTY_NOTICES.txt), which must be kept with
+`didx509cpp.h` when it is redistributed.
+
 ## Contributing
 
 To run clang-tidy locally, configure with Clang 18 and enable the opt-in
